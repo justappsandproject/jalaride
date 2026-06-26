@@ -31,7 +31,7 @@ export async function registerWs(app: FastifyInstance) {
   };
 
   app.broadcastDriverLocation = (driverId: string, payload: unknown) => {
-    const msg = JSON.stringify({ type: "driver_location", driverId, ...payload });
+    const msg = JSON.stringify({ type: "driver_location", driverId, data: payload });
     for (const [, set] of rideChannels) {
       for (const c of set) c.send(msg);
     }
