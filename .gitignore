@@ -1,0 +1,32 @@
+node_modules/
+dist/
+.next/
+.expo/
+*.db
+.env
+.env.local
+.env*.local
+.DS_Store
+*.log
+coverage/
+.turbo/
+.vercel/
+android/
+ios/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+.rider-app/json/
+
+# EAS inspect artifacts
+rider-app/json/
+driver-app/json/
+
+# Local env files (never commit secrets)
+**/.env
+!**/.env.example
+
+# Lock files in nested artifact dirs
+rider-app/json/

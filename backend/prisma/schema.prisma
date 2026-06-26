@@ -1,0 +1,128 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  RIDER
+  DRIVER
+  ADMIN
+}
+
+enum DriverStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SUSPENDED
+}
+
+enum RideStatus {
+  REQUESTED
+  MATCHED
+  DRIVER_EN_ROUTE
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+model User {
+  id           String   @id @default(cuid())
+  phone        String   @unique
+  email        String?
+  name         String
+  passwordHash String
+  role         UserRole @default(RIDER)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  driverProfile Driver?
+  ridesAsRider  Ride[]  @relation("RiderRides")
+  wallet        Wallet?
+  ratingsGiven  Rating[] @relation("Rater")
+  ratingsRecv   Rating[] @relation("Ratee")
+}
+
+model Driver {
+  id         String        @id @default(cuid())
+  userId     String        @unique
+  user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  licenseNo  String?
+  status     DriverStatus  @default(PENDING)
+  rating     Float         @default(5)
+  isOnline   Boolean       @default(false)
+  lat        Float?
+  lng        Float?
+  heading    Float?
+  updatedAt  DateTime      @updatedAt
+  vehicles   Vehicle[]
+  rides      Ride[]
+}
+
+model Vehicle {
+  id        String @id @default(cuid())
+  driverId  String
+  driver    Driver @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  make      String
+  model     String
+  plate     String
+  category  String @default("ECONOMY")
+}
+
+model Ride {
+  id              String     @id @default(cuid())
+  riderId         String
+  rider           User       @relation("RiderRides", fields: [riderId], references: [id])
+  driverId        String?
+  driver          Driver?    @relation(fields: [driverId], references: [id])
+  originLat       Float
+  originLng       Float
+  destLat         Float
+  destLng         Float
+  originLabel     String?
+  destLabel       String?
+  category        String     @default("ECONOMY")
+  status          RideStatus @default(REQUESTED)
+  fareEstimate    Float?
+  fareFinal       Float?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  payment         Payment?
+  ratings         Rating[]
+}
+
+model Payment {
+  id         String   @id @default(cuid())
+  rideId     String   @unique
+  ride       Ride     @relation(fields: [rideId], references: [id], onDelete: Cascade)
+  amount     Float
+  method     String
+  status     String   @default("PENDING")
+  gatewayRef String?
+  createdAt  DateTime @default(now())
+}
+
+model Wallet {
+  id        String @id @default(cuid())
+  userId    String @unique
+  user      User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  balance   Float  @default(0)
+  currency  String @default("USD")
+  updatedAt DateTime @updatedAt
+}
+
+model Rating {
+  id        String @id @default(cuid())
+  rideId    String
+  ride      Ride   @relation(fields: [rideId], references: [id], onDelete: Cascade)
+  raterId   String
+  rater     User   @relation("Rater", fields: [raterId], references: [id])
+  rateeId   String
+  ratee     User   @relation("Ratee", fields: [rateeId], references: [id])
+  score     Int
+  comment   String?
+  createdAt DateTime @default(now())
+}

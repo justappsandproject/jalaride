@@ -1,0 +1,11 @@
+{
+  "name": "jala-ride",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "db:migrate": "node scripts/apply-migrations.mjs"
+  },
+  "devDependencies": {
+    "pg": "^8.13.3"
+  }
+}
