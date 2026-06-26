@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="400" y2="400">
+      <stop offset="0%" stop-color="#132036"/>
+      <stop offset="100%" stop-color="#0a1628"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1B6B3A"/>
+      <stop offset="100%" stop-color="#0d4024"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#D4A017"/>
+      <stop offset="100%" stop-color="#f0c040"/>
+    </linearGradient>
+  </defs>
+  <rect width="400" height="400" fill="url(#bg)"/>
+  <rect x="24" y="40" width="352" height="320" rx="24" fill="#1a2d4a" stroke="#1B6B3A" stroke-width="2"/>
+  <rect x="40" y="72" width="320" height="140" rx="12" fill="#0a1628"/>
+  <path d="M80 200 Q120 160 200 180 T320 200" stroke="url(#green)" stroke-width="3" fill="none" opacity="0.8"/>
+  <circle cx="200" cy="180" r="8" fill="#D4A017"/>
+  <circle cx="200" cy="180" r="16" fill="#D4A017" opacity="0.3"/>
+  <rect x="40" y="230" width="320" height="110" rx="12" fill="#132036"/>
+  <rect x="56" y="250" width="48" height="48" rx="24" fill="url(#green)"/>
+  <rect x="120" y="258" width="120" height="12" rx="6" fill="#2d4a6a"/>
+  <rect x="120" y="278" width="80" height="8" rx="4" fill="#1B6B3A" opacity="0.6"/>
+  <rect x="280" y="260" width="64" height="32" rx="8" fill="url(#gold)" opacity="0.9"/>
+  <text x="200" y="120" text-anchor="middle" fill="#D4A017" font-size="14" font-family="system-ui">Live map</text>
+  <circle cx="340" cy="60" r="6" fill="#38a169">
+    <animate attributeName="opacity" values="1;0.4;1" dur="2s" repeatCount="indefinite"/>
+  </circle>
+</svg>

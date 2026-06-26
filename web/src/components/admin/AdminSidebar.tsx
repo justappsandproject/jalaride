@@ -13,6 +13,7 @@ import {
   Shield,
   Users,
 } from "lucide-react";
+import { AdminLogoutButton } from "./AdminLogoutButton";
 
 const nav = [
   { href: "/admin", label: "Overview", icon: LayoutDashboard },
@@ -117,11 +118,12 @@ export function AdminSidebar() {
           );
         })}
       </nav>
-      <div className="border-t border-white/10 p-4">
+      <div className="border-t border-white/10 p-4 space-y-3">
         <div className="flex items-center gap-2 text-xs text-text-secondary">
           <Shield className="h-4 w-4 text-success" />
           Secured admin session
         </div>
+        <AdminLogoutButton />
       </div>
     </aside>
   );
