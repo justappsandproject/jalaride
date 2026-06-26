@@ -23,6 +23,21 @@ await registerJwtAuth(app);
 
 app.decorate("prisma", prisma);
 
+app.get("/", async () => ({
+  service: "jala-ride-api",
+  status: "ok",
+  docs: "https://github.com/justappsandproject/jalaride",
+  endpoints: {
+    health: "/health",
+    auth: "/v1/auth",
+    rides: "/v1/rides",
+    driver: "/v1/driver",
+    admin: "/v1/admin",
+    websocket: "/ws?rideId={id}",
+  },
+  note: "Free-tier hosts may sleep after ~15 min idle; first request can take 30–60s.",
+}));
+
 app.get("/health", async () => ({ ok: true, service: "jala-ride-api" }));
 
 await app.register(authRoutes, { prefix: "/v1/auth" });

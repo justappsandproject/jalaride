@@ -49,6 +49,7 @@
       "typedRoutes": true
     },
     "extra": {
+      "apiUrl": "https://jala-ride-api.onrender.com",
       "router": {},
       "eas": {
         "projectId": "11b32129-d861-48c5-992a-20cd71944616"
