@@ -12,17 +12,17 @@ export const appDownloads = {
   riderApk:
     process.env.NEXT_PUBLIC_RIDER_APK_URL ??
     fileUrls.riderApk ??
-    "#download-rider",
+    "#",
   riderAab:
     process.env.NEXT_PUBLIC_RIDER_AAB_URL ??
     fileUrls.riderAab ??
-    "#download-rider",
+    "#",
   driverApk:
     process.env.NEXT_PUBLIC_DRIVER_APK_URL ??
     fileUrls.driverApk ??
-    "#download-driver",
+    "#",
   driverAab:
     process.env.NEXT_PUBLIC_DRIVER_AAB_URL ??
     fileUrls.driverAab ??
-    "#download-driver",
+    "#",
 };

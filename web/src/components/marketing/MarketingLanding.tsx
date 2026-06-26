@@ -56,6 +56,43 @@ const stats = [
   { label: "Safety rating", value: "4.9", suffix: "★" },
 ];
 
+function DownloadButton({
+  href,
+  label,
+  variant = "primary",
+}: {
+  href: string;
+  label: string;
+  variant?: "primary" | "secondary" | "accent";
+}) {
+  const ready = Boolean(href && !href.startsWith("#"));
+  const styles = {
+    primary: "bg-primary text-white shadow-lg shadow-primary/30 hover:scale-105",
+    accent: "bg-accent text-background shadow-lg shadow-accent/30 hover:scale-105",
+    secondary: "border border-white/20 hover:bg-white/10",
+  };
+  if (!ready) {
+    return (
+      <span
+        className={`inline-flex items-center justify-center gap-2 rounded-xl px-6 py-3 text-sm font-semibold opacity-60 ${styles[variant]}`}
+      >
+        <Download className="h-4 w-4" />
+        {label} — building…
+      </span>
+    );
+  }
+  return (
+    <a
+      href={href}
+      download={label.includes("APK")}
+      className={`inline-flex items-center justify-center gap-2 rounded-xl px-6 py-3 text-sm font-semibold transition ${styles[variant]}`}
+    >
+      <Download className="h-4 w-4" />
+      {label}
+    </a>
+  );
+}
+
 function useCounter(end: number, duration = 2000, active: boolean) {
   const [count, setCount] = useState(0);
   useEffect(() => {
@@ -344,20 +381,8 @@ export function MarketingLanding() {
               <h3 className="mt-4 text-xl font-semibold">Jala Ride — Rider</h3>
               <p className="mt-2 text-sm text-text-secondary">Book verified rides across Nigeria</p>
               <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
-                <a
-                  href={appDownloads.riderApk}
-                  download
-                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-primary/30 transition hover:scale-105"
-                >
-                  <Download className="h-4 w-4" />
-                  Download APK
-                </a>
-                <a
-                  href={appDownloads.riderAab}
-                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/20 px-6 py-3 text-sm font-medium transition hover:bg-white/10"
-                >
-                  Download AAB (Play Store)
-                </a>
+                <DownloadButton href={appDownloads.riderApk} label="Download APK" variant="primary" />
+                <DownloadButton href={appDownloads.riderAab} label="Download AAB (Play Store)" variant="secondary" />
               </div>
             </div>
             <div className="card-hover rounded-2xl border border-primary/30 bg-primary/10 p-8 backdrop-blur">
@@ -365,20 +390,8 @@ export function MarketingLanding() {
               <h3 className="mt-4 text-xl font-semibold">Jala Ride Driver</h3>
               <p className="mt-2 text-sm text-text-secondary">Drive fleet vehicles & manage remittance</p>
               <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
-                <a
-                  href={appDownloads.driverApk}
-                  download
-                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-accent px-6 py-3 text-sm font-semibold text-background shadow-lg shadow-accent/30 transition hover:scale-105"
-                >
-                  <Download className="h-4 w-4" />
-                  Download APK
-                </a>
-                <a
-                  href={appDownloads.driverAab}
-                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-accent/40 px-6 py-3 text-sm font-medium text-accent transition hover:bg-accent/10"
-                >
-                  Download AAB (Play Store)
-                </a>
+                <DownloadButton href={appDownloads.driverApk} label="Download APK" variant="accent" />
+                <DownloadButton href={appDownloads.driverAab} label="Download AAB (Play Store)" variant="secondary" />
               </div>
             </div>
           </div>

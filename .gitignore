@@ -30,3 +30,7 @@ driver-app/json/
 
 # Lock files in nested artifact dirs
 rider-app/json/
+
+# Built mobile binaries (deploy via Vercel CLI after flutter build)
+web/public/downloads/*.apk
+web/public/downloads/*.aab

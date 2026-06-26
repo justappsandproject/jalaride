@@ -1,6 +1,6 @@
 {
-  "riderApk": null,
-  "riderAab": null,
-  "driverApk": null,
-  "driverAab": null
+  "riderApk": "/downloads/jala-ride-rider.apk",
+  "riderAab": "/downloads/jala-ride-rider.aab",
+  "driverApk": "/downloads/jala-ride-driver.apk",
+  "driverAab": "/downloads/jala-ride-driver.aab"
 }
