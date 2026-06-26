@@ -1,3 +1,9 @@
+databases:
+  - name: jala-ride-db
+    plan: free
+    databaseName: jalaride
+    user: jalaride
+
 services:
   - type: web
     name: jala-ride-api
@@ -11,7 +17,9 @@ services:
       - key: NODE_ENV
         value: production
       - key: DATABASE_URL
-        sync: false
+        fromDatabase:
+          name: jala-ride-db
+          property: connectionString
       - key: JWT_SECRET
         generateValue: true
       - key: PORT
