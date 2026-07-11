@@ -2,7 +2,8 @@ import type { FastifyInstance } from "fastify";
 import type { Driver, Ride } from "@prisma/client";
 
 const OFFER_TTL_MS = 15_000;
-const HEARTBEAT_MAX_AGE_MS = 30_000;
+/** Tolerate ~2–3 missed beats plus brief backgrounding (client beats every 10s). */
+const HEARTBEAT_MAX_AGE_MS = 90_000;
 const MAX_ROUNDS = 3;
 const RADIUS_STEP_KM = 2;
 

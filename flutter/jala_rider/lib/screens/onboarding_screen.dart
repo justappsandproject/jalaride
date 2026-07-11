@@ -177,7 +177,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         children: [
           const Text('Step 1 — Verify NIN', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
-          const Text('We contact NIMC to verify your identity. Demo NINs: 12345678901, 98765432109'),
+          Text(
+            __DEV__
+                ? 'We verify your NIN with NIMC. Sandbox NINs for testing: 12345678901, 98765432109'
+                : 'We verify your NIN with NIMC to confirm your identity.',
+          ),
           const SizedBox(height: 24),
           TextField(
             controller: _nin,

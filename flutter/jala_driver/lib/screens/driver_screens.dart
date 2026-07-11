@@ -1,49 +1,80 @@
 import 'dart:async';
+
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+
 import '../services/api_client.dart';
+import '../services/driver_presence.dart';
 import '../theme/tokens.dart';
 import '../widgets/design/design.dart';
 import 'driver_active_ride_screen.dart';
 
 class DriverHomeScreen extends StatefulWidget {
-  const DriverHomeScreen({super.key, required this.token});
+  const DriverHomeScreen({super.key, required this.token, required this.presence});
 
   final String token;
+  final DriverPresence presence;
 
   @override
   State<DriverHomeScreen> createState() => _DriverHomeScreenState();
 }
 
 class _DriverHomeScreenState extends State<DriverHomeScreen> {
-  bool _online = false;
-  bool _busy = false;
   bool _loadingJobs = false;
   List<dynamic> _offers = [];
   Timer? _poll;
-  Timer? _heartbeat;
   Timer? _alertSound;
   LatLng _center = const LatLng(9.0765, 7.3986);
   String? _modalOfferId;
   bool _modalOpen = false;
 
+  String _earningsValue = '—';
+  String _tripsValue = '—';
+  bool _loadingSummary = true;
+
   ApiClient get _api => ApiClient(token: widget.token);
+  bool get _online => widget.presence.online;
+  bool get _busy => widget.presence.busy;
 
   @override
   void initState() {
     super.initState();
+    widget.presence.addListener(_onPresence);
     _loadLocation();
+    _loadSummary();
+    if (widget.presence.online) _startPolling();
   }
 
   @override
   void dispose() {
+    widget.presence.removeListener(_onPresence);
     _poll?.cancel();
-    _heartbeat?.cancel();
     _alertSound?.cancel();
     super.dispose();
+  }
+
+  void _onPresence() {
+    if (!mounted) return;
+    setState(() {});
+    if (widget.presence.online) {
+      _startPolling();
+    } else {
+      _poll?.cancel();
+      _stopAlert();
+      setState(() {
+        _offers = [];
+        _modalOfferId = null;
+      });
+    }
+  }
+
+  void _startPolling() {
+    _poll?.cancel();
+    _loadOffers();
+    _poll = Timer.periodic(const Duration(seconds: 3), (_) => _loadOffers());
   }
 
   Future<void> _loadLocation() async {
@@ -56,45 +87,25 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     } catch (_) {}
   }
 
-  Future<void> _sendHeartbeat() async {
+  Future<void> _loadSummary() async {
     try {
-      final p = await Geolocator.getCurrentPosition();
-      if (mounted) setState(() => _center = LatLng(p.latitude, p.longitude));
-      await _api.heartbeat(lat: p.latitude, lng: p.longitude);
-    } catch (_) {}
-  }
-
-  Future<void> _setOnline(bool value) async {
-    if (_busy) return;
-    setState(() => _busy = true);
-    try {
-      if (!value) {
-        await _api.goOffline();
-        _poll?.cancel();
-        _heartbeat?.cancel();
-        _stopAlert();
-        setState(() {
-          _online = false;
-          _offers = [];
-        });
-      } else {
-        await _api.goOnline();
-        await _sendHeartbeat();
-        setState(() => _online = true);
-        await _loadOffers();
-        _poll = Timer.periodic(const Duration(seconds: 3), (_) => _loadOffers());
-        _heartbeat = Timer.periodic(const Duration(seconds: 10), (_) => _sendHeartbeat());
-      }
-    } catch (e) {
+      final data = await _api.earningsSummary();
+      final totals = data['totals'] as Map<String, dynamic>? ?? {};
+      final revenue = totals['revenue'];
+      final completed = totals['completed'];
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.toString()), backgroundColor: Tokens.red500),
-        );
+        setState(() {
+          _earningsValue = revenue is num ? '₦${revenue.toStringAsFixed(0)}' : '—';
+          _tripsValue = completed?.toString() ?? '—';
+          _loadingSummary = false;
+        });
       }
-    } finally {
-      if (mounted) setState(() => _busy = false);
+    } catch (_) {
+      if (mounted) setState(() => _loadingSummary = false);
     }
   }
+
+  Future<void> _setOnline(bool value) => widget.presence.setOnline(value);
 
   void _startAlert() {
     if (_alertSound != null) return;
@@ -110,6 +121,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   }
 
   Future<void> _loadOffers() async {
+    if (!_online) return;
     setState(() => _loadingJobs = true);
     try {
       final offers = await _api.pendingOffers();
@@ -173,7 +185,6 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   }
 
   Future<void> _acceptOffer(String offerId) async {
-    setState(() => _busy = true);
     try {
       await _api.acceptOffer(offerId);
       if (mounted) {
@@ -188,30 +199,6 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           SnackBar(content: Text(e.toString()), backgroundColor: Tokens.red500),
         );
       }
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _accept(String id) async {
-    // Legacy ride-id accept
-    setState(() => _busy = true);
-    try {
-      await _api.acceptRide(id);
-      if (mounted) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => DriverActiveRideScreen(token: widget.token)),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.toString()), backgroundColor: Tokens.red500),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -248,14 +235,28 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                     ToggleSwitchCard(
                       online: _online,
                       onChanged: _busy ? (_) {} : _setOnline,
-                      subtitle: _busy ? 'Updating…' : (_online ? 'Receiving nearby requests' : 'Go online to get rides'),
+                      subtitle: _busy
+                          ? 'Updating…'
+                          : (_online ? 'Receiving nearby requests' : 'Go online to get rides'),
                     ),
                     const SizedBox(height: 8),
-                    const Row(
+                    Row(
                       children: [
-                        Expanded(child: StatChip(value: '₦0', label: 'today (sample)', accent: Tokens.gold500)),
-                        SizedBox(width: 8),
-                        Expanded(child: StatChip(value: '0', label: 'trips today', accent: Tokens.green500)),
+                        Expanded(
+                          child: StatChip(
+                            value: _loadingSummary ? '…' : _earningsValue,
+                            label: 'earnings (all time)',
+                            accent: Tokens.gold500,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: StatChip(
+                            value: _loadingSummary ? '…' : _tripsValue,
+                            label: 'completed trips',
+                            accent: Tokens.green500,
+                          ),
+                        ),
                       ],
                     ),
                   ],
@@ -351,13 +352,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                                 child: AppButton(
                                   label: 'Accept',
                                   loading: _busy,
-                                  onPressed: () {
-                                    if (offerId != null) {
-                                      _acceptOffer(offerId);
-                                    } else {
-                                      _accept(ride['id'] as String);
-                                    }
-                                  },
+                                  onPressed: offerId != null ? () => _acceptOffer(offerId) : null,
                                 ),
                               ),
                             ],
@@ -471,8 +466,6 @@ class _EarningsScreenState extends State<EarningsScreen> {
   List<dynamic> _rides = [];
   bool _loading = true;
 
-  static const _sampleBars = [1200.0, 3400.0, 2100.0, 4500.0, 1800.0, 5200.0, 3900.0];
-
   @override
   void initState() {
     super.initState();
@@ -493,19 +486,61 @@ class _EarningsScreenState extends State<EarningsScreen> {
     }
   }
 
-  double get _sampleTotal {
-    switch (_segment) {
+  double _fareOf(Map<String, dynamic> ride) {
+    final finalFare = ride['fareFinal'];
+    final estimate = ride['fareEstimate'];
+    if (finalFare is num) return finalFare.toDouble();
+    if (estimate is num) return estimate.toDouble();
+    return 0;
+  }
+
+  DateTime? _createdAt(Map<String, dynamic> ride) =>
+      DateTime.tryParse(ride['createdAt']?.toString() ?? '');
+
+  bool _inPeriod(DateTime dt, int segment) {
+    final now = DateTime.now();
+    switch (segment) {
       case 0:
-        return 3900;
+        return dt.year == now.year && dt.month == now.month && dt.day == now.day;
       case 2:
-        return 48200;
+        return dt.year == now.year && dt.month == now.month;
       default:
-        return _sampleBars.reduce((a, b) => a + b);
+        return !dt.isBefore(now.subtract(const Duration(days: 7)));
     }
   }
 
+  List<Map<String, dynamic>> get _completedRides => _rides
+      .where((r) => (r as Map<String, dynamic>)['status'] == 'COMPLETED')
+      .cast<Map<String, dynamic>>()
+      .toList();
+
+  List<Map<String, dynamic>> get _periodRides {
+    return _completedRides.where((r) {
+      final dt = _createdAt(r);
+      return dt != null && _inPeriod(dt, _segment);
+    }).toList();
+  }
+
+  double get _periodTotal => _periodRides.fold(0.0, (s, r) => s + _fareOf(r));
+
+  List<double> get _weekdayBars {
+    final bars = List<double>.filled(7, 0);
+    for (final r in _periodRides) {
+      final dt = _createdAt(r);
+      if (dt == null) continue;
+      bars[dt.weekday - 1] += _fareOf(r);
+    }
+    return bars;
+  }
+
+  bool get _hasChartData => _weekdayBars.any((b) => b > 0);
+
   @override
   Widget build(BuildContext context) {
+    final periodRides = _periodRides;
+    final bars = _weekdayBars;
+    final maxY = bars.fold<double>(0, (m, v) => v > m ? v : m);
+
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -520,74 +555,76 @@ class _EarningsScreenState extends State<EarningsScreen> {
         ),
         const SizedBox(height: 20),
         Text(
-          '₦${_sampleTotal.toStringAsFixed(0)}',
+          '₦${_periodTotal.toStringAsFixed(0)}',
           style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w800, color: Tokens.gold500),
         ),
-        const Row(
-          children: [
-            Icon(Icons.trending_up, size: 16, color: Tokens.green500),
-            SizedBox(width: 4),
-            Text('+12% vs prior (sample)', style: TextStyle(color: Tokens.textSecondary, fontSize: 13)),
-          ],
-        ),
-        const SizedBox(height: 8),
-        const Text('Sample earnings — not live payout data', style: TextStyle(color: Tokens.textTertiary, fontSize: 12)),
         const SizedBox(height: 20),
-        AppCard(
-          child: SizedBox(
-            height: 180,
-            child: BarChart(
-              BarChartData(
-                borderData: FlBorderData(show: false),
-                gridData: const FlGridData(show: false),
-                titlesData: FlTitlesData(
-                  leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                  topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                  rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                  bottomTitles: AxisTitles(
-                    sideTitles: SideTitles(
-                      showTitles: true,
-                      getTitlesWidget: (v, _) {
-                        const days = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
-                        final i = v.toInt();
-                        if (i < 0 || i > 6) return const SizedBox.shrink();
-                        return Text(days[i], style: const TextStyle(color: Tokens.textTertiary, fontSize: 11));
-                      },
+        if (_loading)
+          const SkeletonBox(height: 180, width: double.infinity, radius: 16)
+        else if (!_hasChartData)
+          const AppCard(
+            child: EmptyState(
+              icon: Icons.bar_chart_outlined,
+              headline: 'No earnings in this period',
+              subtext: 'Completed trips will appear on the chart once you finish rides.',
+            ),
+          )
+        else
+          AppCard(
+            child: SizedBox(
+              height: 180,
+              child: BarChart(
+                BarChartData(
+                  borderData: FlBorderData(show: false),
+                  gridData: const FlGridData(show: false),
+                  maxY: maxY * 1.15,
+                  titlesData: FlTitlesData(
+                    leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                    topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                    rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                    bottomTitles: AxisTitles(
+                      sideTitles: SideTitles(
+                        showTitles: true,
+                        getTitlesWidget: (v, _) {
+                          const days = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+                          final i = v.toInt();
+                          if (i < 0 || i > 6) return const SizedBox.shrink();
+                          return Text(days[i], style: const TextStyle(color: Tokens.textTertiary, fontSize: 11));
+                        },
+                      ),
                     ),
                   ),
-                ),
-                barGroups: List.generate(
-                  7,
-                  (i) => BarChartGroupData(
-                    x: i,
-                    barRods: [
-                      BarChartRodData(
-                        toY: _sampleBars[i],
-                        color: Tokens.gold500,
-                        width: 14,
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                    ],
+                  barGroups: List.generate(
+                    7,
+                    (i) => BarChartGroupData(
+                      x: i,
+                      barRods: [
+                        BarChartRodData(
+                          toY: bars[i],
+                          color: Tokens.gold500,
+                          width: 14,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
             ),
           ),
-        ),
         const SizedBox(height: 20),
         const Text('Trips', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
         const SizedBox(height: 12),
         if (_loading)
           const SkeletonBox(height: 72, width: double.infinity, radius: 16)
-        else if (_rides.isEmpty)
+        else if (periodRides.isEmpty)
           const EmptyState(
             icon: Icons.payments_outlined,
             headline: 'No completed trips yet',
-            subtext: 'Accepted rides will show fare breakdown here.',
+            subtext: 'Completed rides will show fare breakdown here.',
           )
         else
-          ..._rides.take(20).map((r) {
-            final ride = r as Map<String, dynamic>;
+          ...periodRides.take(20).map((ride) {
             return Padding(
               padding: const EdgeInsets.only(bottom: 10),
               child: AppCard(
@@ -599,14 +636,14 @@ class _EarningsScreenState extends State<EarningsScreen> {
                         children: [
                           Text(ride['destLabel']?.toString() ?? 'Trip', style: const TextStyle(fontWeight: FontWeight.w600)),
                           Text(
-                            '${ride['originLabel'] ?? 'Pickup'} → ${ride['status'] ?? ''}',
+                            '${ride['originLabel'] ?? 'Pickup'} → ${ride['destLabel'] ?? 'Drop-off'}',
                             style: const TextStyle(color: Tokens.textSecondary, fontSize: 13),
                           ),
                         ],
                       ),
                     ),
                     Text(
-                      '₦${ride['fareEstimate'] ?? ride['fareFinal'] ?? '—'}',
+                      '₦${ride['fareFinal'] ?? ride['fareEstimate'] ?? '—'}',
                       style: const TextStyle(color: Tokens.gold500, fontWeight: FontWeight.w700),
                     ),
                   ],
@@ -624,81 +661,14 @@ class RemittanceScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const remitted = 18500.0;
-    const target = 25000.0;
-    final progress = remitted / target;
-
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        AppCard(
-          elevated: true,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('Weekly remittance', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
-              const SizedBox(height: 4),
-              const Text('Sample target — Paystack not wired yet', style: TextStyle(color: Tokens.textTertiary, fontSize: 12)),
-              const SizedBox(height: 16),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: LinearProgressIndicator(
-                  value: progress,
-                  minHeight: 12,
-                  backgroundColor: Tokens.bgSurface2,
-                  color: Tokens.gold500,
-                ),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text('₦${remitted.toStringAsFixed(0)} / ₦${target.toStringAsFixed(0)}',
-                      style: const TextStyle(fontWeight: FontWeight.w600)),
-                  const Text('Due in 3 days (sample)', style: TextStyle(color: Tokens.textSecondary, fontSize: 13)),
-                ],
-              ),
-              const SizedBox(height: 16),
-              AppButton(
-                label: 'Pay now',
-                onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Paystack wiring coming — not charged')),
-                  );
-                },
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 24),
-        const Text('Payment history', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
-        const SizedBox(height: 12),
-        ...[
-          ('Sample remittance', '₦25,000', StatusTone.success, 'Paid'),
-          ('Sample remittance', '₦25,000', StatusTone.warning, 'Pending'),
-          ('Sample remittance', '₦18,500', StatusTone.danger, 'Overdue'),
-        ].map(
-          (row) => Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: AppCard(
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(row.$1, style: const TextStyle(fontWeight: FontWeight.w600)),
-                        const Text('Sample row', style: TextStyle(color: Tokens.textTertiary, fontSize: 12)),
-                      ],
-                    ),
-                  ),
-                  Text(row.$2, style: const TextStyle(fontWeight: FontWeight.w700)),
-                  const SizedBox(width: 8),
-                  StatusPill(label: row.$4, tone: row.$3),
-                ],
-              ),
-            ),
-          ),
+        const EmptyState(
+          icon: Icons.account_balance_wallet_outlined,
+          headline: 'Remittance coming soon',
+          subtext:
+              'Weekly remittance and Paystack payouts will appear here once fleet remittance is enabled for your account.',
         ),
       ],
     );

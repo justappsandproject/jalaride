@@ -24,6 +24,22 @@ const vehicleBody = z.object({
 export async function driverRoutes(app: FastifyInstance) {
   app.addHook("preHandler", app.authenticate);
 
+  app.get("/me", async (req, reply) => {
+    const user = req.user as { sub: string; role: string };
+    if (user.role !== "DRIVER") {
+      return reply.status(403).send({ error: "Drivers only" });
+    }
+    const driver = await app.prisma.driver.findUnique({
+      where: { userId: user.sub },
+      include: {
+        user: { select: { id: true, name: true, phone: true, ninVerified: true, createdAt: true } },
+        vehicles: true,
+      },
+    });
+    if (!driver) return reply.status(404).send({ error: "Not found" });
+    return { driver };
+  });
+
   app.post("/online", async (req, reply) => {
     const user = req.user as { sub: string; role: string };
     if (user.role !== "DRIVER") {

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -7,6 +8,14 @@ import '../services/api_client.dart';
 import '../theme/tokens.dart';
 import '../widgets/design/design.dart';
 import '../widgets/safety_bar.dart';
+
+const _riderRatingTags = [
+  'Great conversation',
+  'Safe driving',
+  'Clean vehicle',
+  'On time',
+  'Professional',
+];
 
 class ActiveRideScreen extends StatefulWidget {
   const ActiveRideScreen({super.key, required this.token, this.rideId});
@@ -22,6 +31,7 @@ class _ActiveRideScreenState extends State<ActiveRideScreen> {
   Map<String, dynamic>? _ride;
   Timer? _poll;
   LatLng? _current;
+  bool _ratingShown = false;
 
   @override
   void initState() {
@@ -53,7 +63,14 @@ class _ActiveRideScreenState extends State<ActiveRideScreen> {
       } else {
         ride = await api.activeRide();
       }
-      if (mounted) setState(() => _ride = ride);
+      if (!mounted) return;
+      final prevStatus = _ride?['status'] as String?;
+      setState(() => _ride = ride);
+      final status = ride?['status'] as String?;
+      if (status == 'COMPLETED' && !_ratingShown && prevStatus != 'COMPLETED') {
+        _ratingShown = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) => _showRatingSheet());
+      }
     } catch (_) {}
   }
 
@@ -68,6 +85,119 @@ class _ActiveRideScreenState extends State<ActiveRideScreen> {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
       }
     }
+  }
+
+  Future<void> _shareTrip() async {
+    final id = _ride?['id'] as String?;
+    if (id == null) return;
+    try {
+      final res = await ApiClient(token: widget.token).shareRide(id);
+      final url = res['url'] as String?;
+      if (url == null || url.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Could not create share link')),
+          );
+        }
+        return;
+      }
+      await Clipboard.setData(ClipboardData(text: url));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Share link copied to clipboard')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+      }
+    }
+  }
+
+  Future<void> _showRatingSheet() async {
+    if (!mounted) return;
+    var score = 5;
+    final selectedTags = <String>{};
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Tokens.bgSurface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) => Padding(
+          padding: EdgeInsets.fromLTRB(24, 24, 24, 24 + MediaQuery.of(ctx).padding.bottom),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text('Rate your trip', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(5, (i) {
+                  final star = i + 1;
+                  return IconButton(
+                    onPressed: () => setSheet(() => score = star),
+                    icon: Icon(
+                      star <= score ? Icons.star : Icons.star_border,
+                      color: Tokens.gold500,
+                      size: 36,
+                    ),
+                  );
+                }),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: _riderRatingTags.map((tag) {
+                  final on = selectedTags.contains(tag);
+                  return FilterChip(
+                    label: Text(tag),
+                    selected: on,
+                    onSelected: (_) => setSheet(() {
+                      if (on) {
+                        selectedTags.remove(tag);
+                      } else {
+                        selectedTags.add(tag);
+                      }
+                    }),
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 20),
+              AppButton(
+                label: 'Submit rating',
+                onPressed: () async {
+                  final id = _ride?['id'] as String?;
+                  if (id == null) return;
+                  try {
+                    await ApiClient(token: widget.token).rateRide(
+                      id,
+                      score: score,
+                      tags: selectedTags.toList(),
+                    );
+                    if (ctx.mounted) Navigator.pop(ctx);
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Thanks for your feedback')),
+                      );
+                    }
+                  } catch (e) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+                    }
+                  }
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _confirmSos() async {
@@ -106,6 +236,7 @@ class _ActiveRideScreenState extends State<ActiveRideScreen> {
       case 'IN_PROGRESS':
       case 'PIN_CONFIRMED':
       case 'MATCHED':
+      case 'COMPLETED':
         return StatusTone.success;
       case 'ARRIVED':
       case 'DRIVER_EN_ROUTE':
@@ -134,9 +265,35 @@ class _ActiveRideScreenState extends State<ActiveRideScreen> {
         return 'Driver on the way';
       case 'ARRIVED':
         return 'Driver has arrived';
+      case 'COMPLETED':
+        return 'Trip completed';
       default:
         return 'Status: $status';
     }
+  }
+
+  List<Widget> _trustChips(Map<String, dynamic>? trust) {
+    if (trust == null) return [];
+    final chips = <Widget>[];
+    if (trust['ninVerified'] == true) {
+      chips.add(_TrustChip(label: 'NIN verified'));
+    }
+    if (trust['driverApproved'] == true) {
+      chips.add(_TrustChip(label: 'Approved driver'));
+    }
+    final days = trust['accountTenureDays'];
+    if (days is num && days > 0) {
+      chips.add(_TrustChip(label: '${days.toInt()} days on Jala'));
+    }
+    final rating = trust['rating'];
+    if (rating is num && rating > 0) {
+      chips.add(_TrustChip(label: '${rating.toStringAsFixed(1)} ★'));
+    }
+    if (chips.isEmpty) return [];
+    return [
+      const SizedBox(height: 8),
+      Wrap(spacing: 6, runSpacing: 6, children: chips),
+    ];
   }
 
   Future<void> _retry() async {
@@ -177,11 +334,18 @@ class _ActiveRideScreenState extends State<ActiveRideScreen> {
     final origin = LatLng((ride['originLat'] as num).toDouble(), (ride['originLng'] as num).toDouble());
     final dest = LatLng((ride['destLat'] as num).toDouble(), (ride['destLng'] as num).toDouble());
     final pin = ride['pickupPinPlain'] as String?;
-    final showPin = status == 'ARRIVED' || status == 'PIN_CONFIRMED' || status == 'IN_PROGRESS';
+    final showPin = const {
+      'MATCHED',
+      'DRIVER_EN_ROUTE',
+      'ARRIVED',
+      'PIN_CONFIRMED',
+    }.contains(status);
     final driver = ride['driver'] as Map<String, dynamic>?;
     final driverUser = driver?['user'] as Map<String, dynamic>?;
+    final trust = ride['trust'] as Map<String, dynamic>?;
     final vehicles = driver?['vehicles'] as List?;
     final vehicle = vehicles != null && vehicles.isNotEmpty ? vehicles.first as Map<String, dynamic> : null;
+    final driverRating = (trust?['rating'] as num?)?.toDouble() ?? (driver?['rating'] as num?)?.toDouble() ?? 0;
 
     return Scaffold(
       body: Column(
@@ -283,81 +447,133 @@ class _ActiveRideScreenState extends State<ActiveRideScreen> {
                     variant: AppButtonVariant.secondary,
                     onPressed: _cancel,
                   ),
-                ] else ...[
-                if (driverUser != null)
-                  AppCard(
-                    padding: const EdgeInsets.all(12),
-                    child: Row(
-                      children: [
-                        AppAvatar(name: driverUser['name']?.toString(), size: 48, verified: true),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(driverUser['name']?.toString() ?? 'Driver', style: const TextStyle(fontWeight: FontWeight.w700)),
-                              const RatingStars(rating: 4.9, size: 14),
-                              if (vehicle != null)
-                                Text(
-                                  '${vehicle['make'] ?? ''} ${vehicle['model'] ?? ''} · ${vehicle['plate'] ?? ''}',
-                                  style: const TextStyle(color: Tokens.textSecondary, fontSize: 12),
-                                ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
+                ] else if (status == 'COMPLETED') ...[
+                  const Text(
+                    'Trip completed',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18),
                   ),
-                if (driverUser != null) const SizedBox(height: 12),
-                Text(ride['destLabel']?.toString() ?? 'Destination', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                Text('Fare est. ₦${ride['fareEstimate'] ?? '—'}', style: const TextStyle(color: Tokens.gold500)),
-                if (showPin && pin != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'Fare: ₦${ride['fareFinal'] ?? ride['fareEstimate'] ?? '—'}',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Tokens.gold500, fontSize: 18, fontWeight: FontWeight.w700),
+                  ),
                   const SizedBox(height: 12),
-                  Text('Pickup PIN: $pin', style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w800, letterSpacing: 4)),
-                  const Text('Confirm with your driver', style: TextStyle(color: Tokens.textSecondary)),
-                ],
-                if (status == 'ARRIVED') ...[
-                  const SizedBox(height: 12),
-                  AppButton(label: 'Confirm PIN', onPressed: _confirmPin),
-                ],
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    _ActionIcon(icon: Icons.call, label: 'Call', onTap: () => launchUrl(Uri.parse('tel:${driverUser?['phone'] ?? '112'}'))),
-                    _ActionIcon(
-                      icon: Icons.share_outlined,
-                      label: 'Share',
-                      onTap: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Trip share link coming soon')),
-                        );
-                      },
+                  AppButton(label: 'Rate your driver', onPressed: _showRatingSheet),
+                ] else ...[
+                  if (showPin && pin != null) ...[
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Tokens.green100,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Tokens.green500.withValues(alpha: 0.3)),
+                      ),
+                      child: Column(
+                        children: [
+                          const Text(
+                            'Your pickup PIN',
+                            style: TextStyle(fontWeight: FontWeight.w600, color: Tokens.textSecondary),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            pin,
+                            style: const TextStyle(fontSize: 36, fontWeight: FontWeight.w800, letterSpacing: 8),
+                          ),
+                          const SizedBox(height: 4),
+                          const Text(
+                            'Share this PIN with your driver at pickup',
+                            style: TextStyle(color: Tokens.textSecondary, fontSize: 13),
+                          ),
+                        ],
+                      ),
                     ),
-                    _ActionIcon(icon: Icons.sos, label: 'SOS', color: Tokens.red500, onTap: _confirmSos),
-                    _ActionIcon(
-                      icon: Icons.mic_none,
-                      label: 'Record',
-                      onTap: () async {
-                        await ApiClient(token: widget.token).toggleRecording(
-                          rideId: ride['id'] as String?,
-                          active: true,
-                        );
-                        if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Silent recording started')),
-                          );
-                        }
-                      },
-                    ),
+                    const SizedBox(height: 12),
                   ],
-                ),
-                const SizedBox(height: 8),
-                SafetyBar(token: widget.token, rideId: ride['id'] as String?),
+                  if (driverUser != null)
+                    AppCard(
+                      padding: const EdgeInsets.all(12),
+                      child: Row(
+                        children: [
+                          AppAvatar(name: driverUser['name']?.toString(), size: 48, verified: trust?['ninVerified'] == true),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(driverUser['name']?.toString() ?? 'Driver', style: const TextStyle(fontWeight: FontWeight.w700)),
+                                if (driverRating > 0) RatingStars(rating: driverRating, size: 14),
+                                if (vehicle != null)
+                                  Text(
+                                    '${vehicle['make'] ?? ''} ${vehicle['model'] ?? ''} · ${vehicle['plate'] ?? ''}',
+                                    style: const TextStyle(color: Tokens.textSecondary, fontSize: 12),
+                                  ),
+                                ..._trustChips(trust),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  if (driverUser != null) const SizedBox(height: 12),
+                  Text(ride['destLabel']?.toString() ?? 'Destination', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  Text('Fare est. ₦${ride['fareEstimate'] ?? '—'}', style: const TextStyle(color: Tokens.gold500)),
+                  if (status == 'ARRIVED') ...[
+                    const SizedBox(height: 12),
+                    AppButton(label: 'Confirm PIN', onPressed: _confirmPin),
+                  ],
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      _ActionIcon(icon: Icons.call, label: 'Call', onTap: () => launchUrl(Uri.parse('tel:${driverUser?['phone'] ?? '112'}'))),
+                      _ActionIcon(icon: Icons.share_outlined, label: 'Share', onTap: _shareTrip),
+                      _ActionIcon(icon: Icons.sos, label: 'SOS', color: Tokens.red500, onTap: _confirmSos),
+                      _ActionIcon(
+                        icon: Icons.mic_none,
+                        label: 'Record',
+                        onTap: () async {
+                          await ApiClient(token: widget.token).toggleRecording(
+                            rideId: ride['id'] as String?,
+                            active: true,
+                          );
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Silent recording started')),
+                            );
+                          }
+                        },
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  SafetyBar(token: widget.token, rideId: ride['id'] as String?),
                 ],
               ],
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _TrustChip extends StatelessWidget {
+  const _TrustChip({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: Tokens.green100,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(color: Tokens.green500, fontSize: 11, fontWeight: FontWeight.w600),
       ),
     );
   }

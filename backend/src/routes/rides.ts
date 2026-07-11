@@ -26,14 +26,36 @@ function generatePin() {
 function sanitizeRide(ride: Record<string, unknown>, role: string, userId: string) {
   const r = { ...ride };
   const status = r.status as string;
-  const pinRevealed = status === "ARRIVED" || status === "PIN_CONFIRMED" || status === "IN_PROGRESS";
-  if (!pinRevealed) {
+  // Rider sees pickup PIN from MATCHED onward so they can share it with the driver.
+  const pinVisibleToRider =
+    role === "RIDER" &&
+    ["MATCHED", "DRIVER_EN_ROUTE", "ARRIVED", "PIN_CONFIRMED", "IN_PROGRESS"].includes(status);
+  const pinVisibleToDriver =
+    role === "DRIVER" &&
+    ["ARRIVED", "PIN_CONFIRMED", "IN_PROGRESS"].includes(status);
+
+  if (!pinVisibleToRider && !pinVisibleToDriver) {
     delete r.pickupPinPlain;
     delete r.pickupPinHash;
-  } else if (role === "RIDER") {
+  } else {
     delete r.pickupPinHash;
-  } else if (role === "DRIVER") {
-    delete r.pickupPinHash;
+    if (!pinVisibleToRider && role === "RIDER") delete r.pickupPinPlain;
+    if (!pinVisibleToDriver && role === "DRIVER") delete r.pickupPinPlain;
+  }
+
+  // Trust summary for rider
+  const driver = r.driver as Record<string, unknown> | undefined;
+  if (driver && role === "RIDER") {
+    const user = driver.user as Record<string, unknown> | undefined;
+    const createdAt = user?.createdAt ? new Date(String(user.createdAt)) : null;
+    r.trust = {
+      ninVerified: Boolean(user?.ninVerified),
+      driverApproved: driver.status === "APPROVED",
+      rating: driver.rating ?? null,
+      accountTenureDays: createdAt
+        ? Math.floor((Date.now() - createdAt.getTime()) / 86_400_000)
+        : null,
+    };
   }
   return r;
 }
@@ -353,6 +375,13 @@ export async function rideRoutes(app: FastifyInstance) {
   app.post("/:id/start", async (req, reply) => {
     const user = req.user as { sub: string; role: string };
     const { id } = req.params as { id: string };
+    const ride = await app.prisma.ride.findUnique({ where: { id } });
+    if (!ride) return reply.status(404).send({ error: "Not found" });
+    if (ride.status !== "PIN_CONFIRMED") {
+      return reply.status(400).send({
+        error: "Enter the rider PIN to confirm pickup before starting the trip",
+      });
+    }
     const res = await transition(id, user.sub, user.role, ["PIN_CONFIRMED"], "IN_PROGRESS");
     if ("error" in res) return reply.status(400).send(res);
     return res;

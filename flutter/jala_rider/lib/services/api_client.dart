@@ -140,6 +140,21 @@ class ApiClient {
     return _decode(await _post(ApiConfig.uri('/v1/rides/$rideId/cancel'), {}));
   }
 
+  Future<Map<String, dynamic>> shareRide(String rideId) async =>
+      _decode(await _post(ApiConfig.uri('/v1/rides/$rideId/share'), {}));
+
+  Future<Map<String, dynamic>> verifyPin(String rideId, {String? pin}) async =>
+      _decode(await _post(ApiConfig.uri('/v1/rides/$rideId/verify-pin'), {
+        if (pin != null) 'pin': pin,
+      }));
+
+  Future<Map<String, dynamic>> rateRide(String rideId, {required int score, List<String> tags = const [], String? comment}) async =>
+      _decode(await _post(ApiConfig.uri('/v1/rides/$rideId/rate'), {
+        'score': score,
+        'tags': tags,
+        if (comment != null) 'comment': comment,
+      }));
+
   Future<Map<String, dynamic>> placesAutocomplete(String input) async {
     return _decode(await _get(ApiConfig.uri('/v1/places/autocomplete', {'input': input})));
   }

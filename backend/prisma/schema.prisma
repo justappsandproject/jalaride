@@ -157,6 +157,8 @@ model Ride {
   pinRevealedAt      DateTime?
   riderPinConfirmed  Boolean    @default(false)
   driverPinConfirmed Boolean    @default(false)
+  shareToken         String?    @unique
+  shareExpiresAt     DateTime?
   createdAt          DateTime   @default(now())
   updatedAt          DateTime   @updatedAt
   payment            Payment?
@@ -211,8 +213,11 @@ model Rating {
   rateeId   String
   ratee     User     @relation("Ratee", fields: [rateeId], references: [id])
   score     Int
+  tags      String[] @default([])
   comment   String?
   createdAt DateTime @default(now())
+
+  @@unique([rideId, raterId])
 }
 
 model SosEvent {

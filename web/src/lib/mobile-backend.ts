@@ -1,5 +1,9 @@
 const BACKEND_URL = process.env.BACKEND_API_URL ?? "https://jala-ride-api.onrender.com";
 
+/** Public mobile API base — safe for client-side share/trip fetches */
+export const MOBILE_API_URL =
+  process.env.NEXT_PUBLIC_MOBILE_API_URL ?? "https://jala-ride-api.onrender.com";
+
 let cachedToken: string | null = null;
 let tokenExpiry = 0;
 

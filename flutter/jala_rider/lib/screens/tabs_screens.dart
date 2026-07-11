@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../services/api_client.dart';
 import '../services/session.dart';
 import '../theme/tokens.dart';
@@ -14,6 +16,15 @@ class TripsScreen extends StatefulWidget {
 }
 
 class _TripsScreenState extends State<TripsScreen> {
+  static const _visibleStatuses = {
+    'IN_PROGRESS',
+    'PIN_CONFIRMED',
+    'ARRIVED',
+    'DRIVER_EN_ROUTE',
+    'MATCHED',
+    'COMPLETED',
+  };
+
   List<dynamic> _rides = [];
   bool _loading = true;
 
@@ -27,7 +38,10 @@ class _TripsScreenState extends State<TripsScreen> {
     setState(() => _loading = true);
     try {
       final rides = await ApiClient(token: widget.token).myRides();
-      setState(() => _rides = rides);
+      setState(() => _rides = rides.where((r) {
+        final status = (r as Map<String, dynamic>)['status']?.toString();
+        return status != null && _visibleStatuses.contains(status);
+      }).toList());
     } catch (_) {
       setState(() => _rides = []);
     } finally {
@@ -50,6 +64,13 @@ class _TripsScreenState extends State<TripsScreen> {
   }
 
   void _openReceipt(Map<String, dynamic> ride) {
+    final receiptText = [
+      'Jala Ride — Trip receipt',
+      '${ride['originLabel'] ?? 'Pickup'} → ${ride['destLabel'] ?? 'Drop-off'}',
+      'Status: ${ride['status']}',
+      'Fare: ₦${ride['fareFinal'] ?? ride['fareEstimate'] ?? '—'}',
+    ].join('\n');
+
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: Tokens.bgSurface,
@@ -71,13 +92,16 @@ class _TripsScreenState extends State<TripsScreen> {
                 style: const TextStyle(color: Tokens.gold500, fontWeight: FontWeight.w700, fontSize: 18)),
             const SizedBox(height: 20),
             AppButton(
-              label: 'Download PDF',
+              label: 'Copy receipt',
               variant: AppButtonVariant.secondary,
-              onPressed: () {
-                Navigator.pop(ctx);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('PDF export coming soon')),
-                );
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: receiptText));
+                if (ctx.mounted) Navigator.pop(ctx);
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Receipt copied to clipboard')),
+                  );
+                }
               },
             ),
           ],
@@ -104,7 +128,7 @@ class _TripsScreenState extends State<TripsScreen> {
       return const EmptyState(
         icon: Icons.history,
         headline: 'No trips yet',
-        subtext: 'Your completed and cancelled rides will appear here.',
+        subtext: 'Your ongoing and completed trips will appear here.',
       );
     }
     return RefreshIndicator(
@@ -155,89 +179,11 @@ class WalletScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Container(
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(Tokens.radiusCard),
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                Tokens.gold500.withValues(alpha: 0.85),
-                Tokens.bgSurface,
-              ],
-            ),
-            border: Border.all(color: Tokens.gold500.withValues(alpha: 0.4)),
-          ),
-          child: const Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Wallet balance', style: TextStyle(color: Tokens.bgBase, fontWeight: FontWeight.w600)),
-              SizedBox(height: 8),
-              Text('₦0.00', style: TextStyle(fontSize: 36, fontWeight: FontWeight.w800, color: Tokens.bgBase)),
-              SizedBox(height: 4),
-              Text('Sample balance — not live funds', style: TextStyle(color: Tokens.bgBase, fontSize: 12)),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        AppButton(
-          label: 'Top up with Paystack',
-          onPressed: () {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Paystack top-up coming soon')),
-            );
-          },
-        ),
-        const SizedBox(height: 10),
-        AppButton(
-          label: 'Transaction history',
-          variant: AppButtonVariant.secondary,
-          onPressed: () {},
-        ),
-        const SizedBox(height: 24),
-        const Text('Recent activity', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
-        const SizedBox(height: 12),
-        ...[
-          ('Sample top-up', '+₦5,000', true),
-          ('Sample trip fare', '-₦1,850', false),
-          ('Sample refund', '+₦300', true),
-        ].map(
-          (t) => Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: AppCard(
-              child: Row(
-                children: [
-                  Icon(
-                    t.$3 ? Icons.south_west : Icons.north_east,
-                    color: t.$3 ? Tokens.green500 : Tokens.red500,
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(t.$1, style: const TextStyle(fontWeight: FontWeight.w600)),
-                        const Text('Sample transaction', style: TextStyle(color: Tokens.textTertiary, fontSize: 12)),
-                      ],
-                    ),
-                  ),
-                  Text(
-                    t.$2,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w700,
-                      color: t.$3 ? Tokens.green500 : Tokens.textPrimary,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ],
+    return const EmptyState(
+      icon: Icons.account_balance_wallet_outlined,
+      headline: 'Wallet not available yet',
+      subtext:
+          'Trip fares are charged per ride. In-app wallet top-ups will appear here when enabled.',
     );
   }
 }
@@ -247,20 +193,15 @@ class AccountScreen extends StatelessWidget {
 
   final VoidCallback onLogout;
 
-  void _comingSoon(BuildContext context, String title) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => Scaffold(
-          appBar: AppBar(title: Text(title)),
-          body: EmptyState(
-            icon: Icons.construction_outlined,
-            headline: 'Coming soon',
-            subtext: '$title will be available in a future update.',
-          ),
-        ),
-      ),
-    );
+  Future<void> _openSupport(BuildContext context) async {
+    final uri = Uri.parse('mailto:support@jalaride.com');
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri);
+    } else if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Email support@jalaride.com')),
+      );
+    }
   }
 
   @override
@@ -321,33 +262,18 @@ class AccountScreen extends StatelessWidget {
           child: Column(
             children: [
               SectionRow(
-                icon: Icons.payment_outlined,
-                title: 'Payment methods',
-                onTap: () => _comingSoon(context, 'Payment methods'),
-              ),
-              const Divider(height: 1, color: Tokens.borderSubtle),
-              SectionRow(
                 icon: Icons.support_agent_outlined,
                 title: 'Support',
-                onTap: () => _comingSoon(context, 'Support'),
+                onTap: () => _openSupport(context),
               ),
               const Divider(height: 1, color: Tokens.borderSubtle),
               SectionRow(
-                icon: Icons.settings_outlined,
-                title: 'Settings',
-                onTap: () => _comingSoon(context, 'Settings'),
+                icon: Icons.logout,
+                title: 'Sign out',
+                destructive: true,
+                onTap: onLogout,
               ),
             ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        AppCard(
-          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
-          child: SectionRow(
-            icon: Icons.logout,
-            title: 'Sign out',
-            destructive: true,
-            onTap: onLogout,
           ),
         ),
       ],

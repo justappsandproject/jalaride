@@ -11,6 +11,7 @@ import { nimcRoutes } from "./routes/nimc.js";
 import { onboardingRoutes } from "./routes/onboarding.js";
 import { safetyRoutes } from "./routes/safety.js";
 import { placesRoutes } from "./routes/places.js";
+import { shareRoutes, registerRideExtras } from "./routes/share.js";
 import { registerWs } from "./plugins/ws.js";
 import { registerJwtAuth } from "./plugins/jwt-auth.js";
 import { startDispatchLoop } from "./services/dispatch.js";
@@ -41,6 +42,7 @@ app.get("/", async () => ({
     driver: "/v1/driver",
     places: "/v1/places",
     safety: "/v1/safety",
+    share: "/v1/share/:token",
     admin: "/v1/admin",
     websocket: "/ws?rideId={id} or /ws?driverId={id}",
   },
@@ -53,6 +55,13 @@ await app.register(authRoutes, { prefix: "/v1/auth" });
 await app.register(nimcRoutes, { prefix: "/v1/nimc" });
 await app.register(onboardingRoutes, { prefix: "/v1/onboarding" });
 await app.register(rideRoutes, { prefix: "/v1/rides" });
+await app.register(
+  async (scoped) => {
+    await registerRideExtras(scoped);
+  },
+  { prefix: "/v1/rides" },
+);
+await app.register(shareRoutes, { prefix: "/v1/share" });
 await app.register(driverRoutes, { prefix: "/v1/driver" });
 await app.register(placesRoutes, { prefix: "/v1/places" });
 await app.register(safetyRoutes, { prefix: "/v1/safety" });

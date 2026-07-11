@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'services/api_client.dart';
+import 'services/driver_presence.dart';
 import 'services/session.dart';
 import 'theme/app_theme.dart';
 import 'screens/account_screen.dart';
@@ -41,6 +42,7 @@ class _AppGateState extends State<AppGate> {
   bool _loading = true;
   bool _showWelcome = true;
   bool _registering = false;
+  DriverPresence? _presence;
 
   @override
   void initState() {
@@ -48,9 +50,16 @@ class _AppGateState extends State<AppGate> {
     _boot();
   }
 
+  @override
+  void dispose() {
+    _presence?.dispose();
+    super.dispose();
+  }
+
   Future<void> _boot() async {
     final token = await Session.loadToken();
     String? status;
+    DriverPresence? presence;
     if (token != null) {
       try {
         final me = await ApiClient(token: token).onboardingStatus();
@@ -58,17 +67,27 @@ class _AppGateState extends State<AppGate> {
       } catch (_) {
         status = 'APPROVED';
       }
+      if (status == 'APPROVED') {
+        presence = DriverPresence(token: token);
+        await presence.start();
+      }
     }
+    _presence?.dispose();
     setState(() {
       _token = token;
       _registrationStatus = status;
       _loading = false;
       _showWelcome = token == null;
+      _presence = presence;
     });
   }
 
   Future<void> _logout() async {
+    await _presence?.goOfflineForLogout();
+    _presence?.dispose();
+    _presence = null;
     await Session.clear();
+    if (!mounted) return;
     setState(() {
       _token = null;
       _registrationStatus = null;
@@ -106,14 +125,24 @@ class _AppGateState extends State<AppGate> {
       }
       return OnboardingScreen(token: _token!, isDriver: true, onComplete: _boot);
     }
-    return DriverShell(token: _token!, onLogout: _logout);
+    return DriverShell(
+      token: _token!,
+      presence: _presence ?? DriverPresence(token: _token!),
+      onLogout: _logout,
+    );
   }
 }
 
 class DriverShell extends StatefulWidget {
-  const DriverShell({super.key, required this.token, required this.onLogout});
+  const DriverShell({
+    super.key,
+    required this.token,
+    required this.presence,
+    required this.onLogout,
+  });
 
   final String token;
+  final DriverPresence presence;
   final VoidCallback onLogout;
 
   @override
@@ -126,7 +155,18 @@ class _DriverShellState extends State<DriverShell> {
   @override
   void initState() {
     super.initState();
+    widget.presence.addListener(_onPresence);
     _checkActive();
+  }
+
+  @override
+  void dispose() {
+    widget.presence.removeListener(_onPresence);
+    super.dispose();
+  }
+
+  void _onPresence() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _checkActive() async {
@@ -138,11 +178,13 @@ class _DriverShellState extends State<DriverShell> {
 
   @override
   Widget build(BuildContext context) {
+    // IndexedStack keeps Home mounted so offer polling can stay local;
+    // heartbeat lives on DriverPresence and survives tab switches.
     final pages = [
-      DriverHomeScreen(token: widget.token),
+      DriverHomeScreen(token: widget.token, presence: widget.presence),
       EarningsScreen(token: widget.token),
       const RemittanceScreen(),
-      DriverAccountScreen(onLogout: widget.onLogout),
+      DriverAccountScreen(token: widget.token, onLogout: widget.onLogout),
     ];
 
     return Scaffold(
@@ -155,7 +197,7 @@ class _DriverShellState extends State<DriverShell> {
           ],
         ),
       ),
-      body: pages[_index],
+      body: IndexedStack(index: _index, children: pages),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
         onDestinationSelected: (i) => setState(() => _index = i),

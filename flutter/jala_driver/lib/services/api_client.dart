@@ -90,6 +90,10 @@ class ApiClient {
     await _post(ApiConfig.uri('/v1/driver/offline'), {});
   }
 
+  Future<Map<String, dynamic>> driverMe() async {
+    return _decode(await _get(ApiConfig.uri('/v1/driver/me')));
+  }
+
   Future<void> heartbeat({
     required double lat,
     required double lng,
@@ -155,12 +159,27 @@ class ApiClient {
     return _decode(await _post(ApiConfig.uri('/v1/rides/$id/complete'), {}));
   }
 
+  Future<Map<String, dynamic>> verifyPin(String rideId, {String? pin}) async =>
+      _decode(await _post(ApiConfig.uri('/v1/rides/$rideId/verify-pin'), {
+        if (pin != null) 'pin': pin,
+      }));
+
+  Future<Map<String, dynamic>> rateRide(String rideId, {required int score, List<String> tags = const [], String? comment}) async =>
+      _decode(await _post(ApiConfig.uri('/v1/rides/$rideId/rate'), {
+        'score': score,
+        'tags': tags,
+        if (comment != null) 'comment': comment,
+      }));
+
   Future<List<dynamic>> myRides() async {
     final data = _decode(await _get(ApiConfig.uri('/v1/rides/mine')));
     final rides = data['rides'];
     if (rides is List) return rides;
     return [];
   }
+
+  Future<Map<String, dynamic>> earningsSummary() async =>
+      _decode(await _get(ApiConfig.uri('/v1/driver/earnings/summary')));
 
   Future<Map<String, dynamic>> triggerSos({
     String? rideId,
