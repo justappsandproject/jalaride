@@ -12,6 +12,10 @@ export const metadata: Metadata = {
   title: "Jala Ride — Move with Confidence",
   description:
     "Nigeria's identity-verified, government-fleet ride-hailing platform.",
+  icons: {
+    icon: "/favicon.png",
+    apple: "/branding/app-icon-dark.png",
+  },
 };
 
 export default function RootLayout({

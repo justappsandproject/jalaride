@@ -1,28 +1,28 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:http/http.dart' as http;
-
-const apiBaseUrl = String.fromEnvironment(
-  'API_URL',
-  defaultValue: 'https://jala-ride-api.onrender.com',
-);
+import '../config/api_config.dart';
 
 class ApiClient {
   ApiClient({this.token});
 
   String? token;
 
+  static const _timeout = Duration(seconds: 90);
+  static const _maxAttempts = 3;
+
   Map<String, String> get _headers => {
         'Content-Type': 'application/json',
+        'Accept': 'application/json',
         if (token != null) 'Authorization': 'Bearer $token',
       };
 
   Future<Map<String, dynamic>> login(String phone, String password) async {
-    final res = await http.post(
-      Uri.parse('$apiBaseUrl/v1/auth/login'),
-      headers: _headers,
-      body: jsonEncode({'phone': phone, 'password': password}),
-    );
-    return _decode(res);
+    return _decode(await _post(ApiConfig.uri('/v1/auth/login'), {
+      'phone': phone,
+      'password': password,
+    }));
   }
 
   Future<Map<String, dynamic>> register({
@@ -30,37 +30,194 @@ class ApiClient {
     required String password,
     required String name,
   }) async {
-    final res = await http.post(
-      Uri.parse('$apiBaseUrl/v1/auth/register'),
-      headers: _headers,
-      body: jsonEncode({
-        'phone': phone,
-        'password': password,
-        'name': name,
-        'role': 'DRIVER',
-      }),
-    );
-    return _decode(res);
+    return _decode(await _post(ApiConfig.uri('/v1/auth/register'), {
+      'phone': phone,
+      'password': password,
+      'name': name,
+      'role': 'DRIVER',
+    }));
+  }
+
+  Future<Map<String, dynamic>> me() async {
+    return _decode(await _get(ApiConfig.uri('/v1/auth/me')));
+  }
+
+  Future<Map<String, dynamic>> verifyNin(String nin) async {
+    return _decode(await _post(ApiConfig.uri('/v1/nimc/verify'), {'nin': nin}));
+  }
+
+  Future<Map<String, dynamic>> saveProfile({
+    required String nin,
+    required String name,
+    required String dob,
+    required String address,
+    required String phone,
+    String? email,
+  }) async {
+    return _decode(await _post(ApiConfig.uri('/v1/onboarding/profile'), {
+      'nin': nin,
+      'name': name,
+      'dob': dob,
+      'address': address,
+      'phone': phone,
+      'email': email ?? '',
+    }));
+  }
+
+  Future<Map<String, dynamic>> uploadDocument({
+    required String docType,
+    required String fileData,
+  }) async {
+    return _decode(await _post(ApiConfig.uri('/v1/onboarding/document'), {
+      'docType': docType,
+      'fileData': fileData,
+    }));
+  }
+
+  Future<Map<String, dynamic>> submitOnboarding() async {
+    return _decode(await _post(ApiConfig.uri('/v1/onboarding/submit'), {}));
+  }
+
+  Future<Map<String, dynamic>> onboardingStatus() async {
+    return _decode(await _get(ApiConfig.uri('/v1/onboarding/status')));
   }
 
   Future<void> goOnline() async {
-    await http.post(Uri.parse('$apiBaseUrl/v1/driver/online'), headers: _headers);
+    await _post(ApiConfig.uri('/v1/driver/online'), {});
   }
 
   Future<void> goOffline() async {
-    await http.post(Uri.parse('$apiBaseUrl/v1/driver/offline'), headers: _headers);
+    await _post(ApiConfig.uri('/v1/driver/offline'), {});
+  }
+
+  Future<void> heartbeat({
+    required double lat,
+    required double lng,
+    double? heading,
+  }) async {
+    await _post(ApiConfig.uri('/v1/driver/heartbeat'), {
+      'lat': lat,
+      'lng': lng,
+      if (heading != null) 'heading': heading,
+    });
+  }
+
+  Future<List<dynamic>> pendingOffers() async {
+    final data = _decode(await _get(ApiConfig.uri('/v1/driver/offers')));
+    final offers = data['offers'];
+    if (offers is List) return offers;
+    return [];
+  }
+
+  Future<Map<String, dynamic>> acceptOffer(String offerId) async {
+    return _decode(await _post(ApiConfig.uri('/v1/driver/offers/$offerId/accept'), {}));
+  }
+
+  Future<void> declineOffer(String offerId) async {
+    await _post(ApiConfig.uri('/v1/driver/offers/$offerId/decline'), {});
   }
 
   Future<List<dynamic>> availableRides() async {
-    final res = await http.get(Uri.parse('$apiBaseUrl/v1/rides/available'), headers: _headers);
-    final data = _decode(res);
+    final data = _decode(await _get(ApiConfig.uri('/v1/rides/available')));
+    final offers = data['offers'];
+    if (offers is List && offers.isNotEmpty) return offers;
     final rides = data['rides'];
     if (rides is List) return rides;
     return [];
   }
 
-  Future<void> acceptRide(String id) async {
-    await http.post(Uri.parse('$apiBaseUrl/v1/rides/$id/accept'), headers: _headers);
+  Future<Map<String, dynamic>?> activeRide() async {
+    final data = _decode(await _get(ApiConfig.uri('/v1/rides/active')));
+    return data['ride'] as Map<String, dynamic>?;
+  }
+
+  Future<Map<String, dynamic>> acceptRide(String id) async {
+    return _decode(await _post(ApiConfig.uri('/v1/rides/$id/accept'), {}));
+  }
+
+  Future<Map<String, dynamic>> enRoute(String id) async {
+    return _decode(await _post(ApiConfig.uri('/v1/rides/$id/en-route'), {}));
+  }
+
+  Future<Map<String, dynamic>> arrived(String id) async {
+    return _decode(await _post(ApiConfig.uri('/v1/rides/$id/arrived'), {}));
+  }
+
+  Future<Map<String, dynamic>> confirmPin(String id) async {
+    return _decode(await _post(ApiConfig.uri('/v1/rides/$id/confirm-pin'), {}));
+  }
+
+  Future<Map<String, dynamic>> startRide(String id) async {
+    return _decode(await _post(ApiConfig.uri('/v1/rides/$id/start'), {}));
+  }
+
+  Future<Map<String, dynamic>> completeRide(String id) async {
+    return _decode(await _post(ApiConfig.uri('/v1/rides/$id/complete'), {}));
+  }
+
+  Future<List<dynamic>> myRides() async {
+    final data = _decode(await _get(ApiConfig.uri('/v1/rides/mine')));
+    final rides = data['rides'];
+    if (rides is List) return rides;
+    return [];
+  }
+
+  Future<Map<String, dynamic>> triggerSos({
+    String? rideId,
+    double? lat,
+    double? lng,
+    bool silent = false,
+  }) async {
+    return _decode(await _post(ApiConfig.uri('/v1/safety/sos'), {
+      if (rideId != null) 'rideId': rideId,
+      if (lat != null) 'lat': lat,
+      if (lng != null) 'lng': lng,
+      'silent': silent,
+    }));
+  }
+
+  Future<Map<String, dynamic>> toggleRecording({String? rideId, required bool active}) async {
+    return _decode(await _post(ApiConfig.uri('/v1/safety/recording'), {
+      if (rideId != null) 'rideId': rideId,
+      'active': active,
+    }));
+  }
+
+  Future<http.Response> _get(Uri uri) => _send(() => http.get(uri, headers: _headers));
+
+  Future<http.Response> _post(Uri uri, Map<String, dynamic> body) =>
+      _send(() => http.post(uri, headers: _headers, body: jsonEncode(body)));
+
+  Future<http.Response> _send(Future<http.Response> Function() request) async {
+    Object? lastError;
+    for (var attempt = 1; attempt <= _maxAttempts; attempt++) {
+      try {
+        if (attempt == 1) {
+          try {
+            await http.get(ApiConfig.uri('/health')).timeout(_timeout);
+          } catch (_) {}
+        }
+        return await request().timeout(_timeout);
+      } on SocketException catch (e) {
+        lastError = e;
+      } on http.ClientException catch (e) {
+        lastError = e;
+      } on TimeoutException catch (e) {
+        lastError = e;
+      }
+      if (attempt < _maxAttempts) {
+        await Future<void>.delayed(Duration(seconds: 2 * attempt));
+      }
+    }
+    throw Exception(_networkMessage(lastError));
+  }
+
+  String _networkMessage(Object? error) {
+    final msg = error?.toString() ?? '';
+    if (msg.contains('TimeoutException') || msg.contains('timed out')) {
+      return 'Server is waking up (can take up to 90s on first try). Please wait and try again.';
+    }
+    return 'Cannot reach Jala Ride API at ${ApiConfig.baseUrl}. Check your internet connection and try again.';
   }
 
   Map<String, dynamic> _decode(http.Response res) {

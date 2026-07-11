@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 import '../services/api_client.dart';
 import '../services/session.dart';
 import '../theme/app_theme.dart';
+import '../widgets/password_field.dart';
 
 class AuthScreen extends StatefulWidget {
-  const AuthScreen({super.key, required this.onAuthenticated});
+  const AuthScreen({super.key, required this.onAuthenticated, this.onRegister});
 
   final VoidCallback onAuthenticated;
+  final VoidCallback? onRegister;
 
   @override
   State<AuthScreen> createState() => _AuthScreenState();
@@ -15,6 +17,7 @@ class AuthScreen extends StatefulWidget {
 class _AuthScreenState extends State<AuthScreen> {
   final _phone = TextEditingController(text: '+234');
   final _password = TextEditingController();
+  final _confirmPassword = TextEditingController();
   final _name = TextEditingController();
   bool _register = false;
   bool _loading = false;
@@ -24,11 +27,21 @@ class _AuthScreenState extends State<AuthScreen> {
   void dispose() {
     _phone.dispose();
     _password.dispose();
+    _confirmPassword.dispose();
     _name.dispose();
     super.dispose();
   }
 
   Future<void> _submit() async {
+    if (_register && _password.text != _confirmPassword.text) {
+      setState(() => _error = 'Passwords do not match');
+      return;
+    }
+    if (_register && _password.text.length < 6) {
+      setState(() => _error = 'Password must be at least 6 characters');
+      return;
+    }
+
     setState(() {
       _loading = true;
       _error = null;
@@ -50,7 +63,7 @@ class _AuthScreenState extends State<AuthScreen> {
       await Session.save(token, user['name'] as String? ?? 'Rider');
       if (mounted) widget.onAuthenticated();
     } catch (e) {
-      setState(() => _error = e.toString());
+      setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -59,12 +72,31 @@ class _AuthScreenState extends State<AuthScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(_register ? 'Create account' : 'Sign in')),
+      appBar: AppBar(
+        title: Text(_register ? 'Create rider account' : 'Rider sign in'),
+        backgroundColor: Brand.background,
+      ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            Center(
+              child: Image.asset('assets/branding/logo-mark.png', height: 72),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _register ? 'Join Jala Ride' : 'Welcome back, rider',
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Book verified rides across Nigeria',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Brand.textSecondary),
+            ),
+            const SizedBox(height: 24),
             if (_error != null)
               Container(
                 padding: const EdgeInsets.all(12),
@@ -78,6 +110,7 @@ class _AuthScreenState extends State<AuthScreen> {
             if (_register)
               TextField(
                 controller: _name,
+                textCapitalization: TextCapitalization.words,
                 decoration: const InputDecoration(labelText: 'Full name'),
               ),
             if (_register) const SizedBox(height: 16),
@@ -87,18 +120,32 @@ class _AuthScreenState extends State<AuthScreen> {
               decoration: const InputDecoration(labelText: 'Phone number'),
             ),
             const SizedBox(height: 16),
-            TextField(
-              controller: _password,
-              obscureText: true,
-              decoration: const InputDecoration(labelText: 'Password'),
-            ),
+            PasswordField(controller: _password, label: 'Password'),
+            if (_register) ...[
+              const SizedBox(height: 16),
+              PasswordField(
+                controller: _confirmPassword,
+                label: 'Confirm password',
+                textInputAction: TextInputAction.done,
+              ),
+            ],
             const SizedBox(height: 24),
             ElevatedButton(
               onPressed: _loading ? null : _submit,
-              child: Text(_loading ? 'Please wait…' : (_register ? 'Register' : 'Sign in')),
+              child: Text(_loading ? 'Connecting to server…' : (_register ? 'Register' : 'Sign in')),
             ),
             TextButton(
-              onPressed: () => setState(() => _register = !_register),
+              onPressed: () {
+                if (_register && widget.onRegister != null) {
+                  widget.onRegister!();
+                } else {
+                  setState(() {
+                    _register = !_register;
+                    _error = null;
+                    _confirmPassword.clear();
+                  });
+                }
+              },
               child: Text(_register ? 'Already have an account? Sign in' : 'New rider? Register'),
             ),
           ],

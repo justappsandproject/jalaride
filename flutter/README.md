@@ -34,8 +34,16 @@ flutter build appbundle --release
 
 ```bash
 cp jala_rider/build/app/outputs/flutter-apk/app-release.apk ../../web/public/downloads/jala-ride-rider.apk
+cp jala_rider/build/app/outputs/bundle/release/app-release.aab ../../web/public/downloads/jala-ride-rider.aab
 cp jala_driver/build/app/outputs/flutter-apk/app-release.apk ../../web/public/downloads/jala-ride-driver.apk
+cp jala_driver/build/app/outputs/bundle/release/app-release.aab ../../web/public/downloads/jala-ride-driver.aab
+# iOS (requires Xcode; codesign before device install)
+flutter build ios --release --no-codesign
+# Package Runner.app into IPA, then copy to web/public/downloads/
+cd ../../web && vercel deploy --prod --yes
 ```
+
+API URL is locked to `https://jala-ride-api.onrender.com` in production (typos in `API_URL` env are auto-corrected).
 
 ## Features
 

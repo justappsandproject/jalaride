@@ -26,3 +26,8 @@ services:
         value: 4000
       - key: HOST
         value: 0.0.0.0
+      # Same Maps key used by mobile; restrict by IP/API in Google Cloud when possible
+      - key: GOOGLE_MAPS_SERVER_KEY
+        value: AIzaSyCi76exhyPWbzpZSXzP-4RpmBvvfE-V26I
+      - key: GOOGLE_MAPS_API_KEY
+        value: AIzaSyCi76exhyPWbzpZSXzP-4RpmBvvfE-V26I

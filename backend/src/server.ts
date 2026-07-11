@@ -7,8 +7,13 @@ import { authRoutes } from "./routes/auth.js";
 import { rideRoutes } from "./routes/rides.js";
 import { driverRoutes } from "./routes/drivers.js";
 import { adminRoutes } from "./routes/admin.js";
+import { nimcRoutes } from "./routes/nimc.js";
+import { onboardingRoutes } from "./routes/onboarding.js";
+import { safetyRoutes } from "./routes/safety.js";
+import { placesRoutes } from "./routes/places.js";
 import { registerWs } from "./plugins/ws.js";
 import { registerJwtAuth } from "./plugins/jwt-auth.js";
+import { startDispatchLoop } from "./services/dispatch.js";
 
 export const prisma = new PrismaClient();
 
@@ -30,10 +35,14 @@ app.get("/", async () => ({
   endpoints: {
     health: "/health",
     auth: "/v1/auth",
+    nimc: "/v1/nimc",
+    onboarding: "/v1/onboarding",
     rides: "/v1/rides",
     driver: "/v1/driver",
+    places: "/v1/places",
+    safety: "/v1/safety",
     admin: "/v1/admin",
-    websocket: "/ws?rideId={id}",
+    websocket: "/ws?rideId={id} or /ws?driverId={id}",
   },
   note: "Free-tier hosts may sleep after ~15 min idle; first request can take 30–60s.",
 }));
@@ -41,10 +50,15 @@ app.get("/", async () => ({
 app.get("/health", async () => ({ ok: true, service: "jala-ride-api" }));
 
 await app.register(authRoutes, { prefix: "/v1/auth" });
+await app.register(nimcRoutes, { prefix: "/v1/nimc" });
+await app.register(onboardingRoutes, { prefix: "/v1/onboarding" });
 await app.register(rideRoutes, { prefix: "/v1/rides" });
 await app.register(driverRoutes, { prefix: "/v1/driver" });
+await app.register(placesRoutes, { prefix: "/v1/places" });
+await app.register(safetyRoutes, { prefix: "/v1/safety" });
 await app.register(adminRoutes, { prefix: "/v1/admin" });
 await registerWs(app);
+startDispatchLoop(app);
 
 const port = Number(process.env.PORT ?? 4000);
 const host = process.env.HOST ?? "0.0.0.0";

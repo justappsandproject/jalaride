@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
+import '../services/api_client.dart';
 import '../services/session.dart';
 import '../theme/app_theme.dart';
 import 'screens/auth_screen.dart';
 import 'screens/home_screen.dart';
+import 'screens/onboarding_screen.dart';
+import 'screens/pending_screen.dart';
 import 'screens/tabs_screens.dart';
 import 'screens/welcome_screen.dart';
+import 'screens/active_ride_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -34,8 +38,10 @@ class AppGate extends StatefulWidget {
 
 class _AppGateState extends State<AppGate> {
   String? _token;
+  String? _registrationStatus;
   bool _loading = true;
   bool _showWelcome = true;
+  bool _registering = false;
 
   @override
   void initState() {
@@ -45,8 +51,18 @@ class _AppGateState extends State<AppGate> {
 
   Future<void> _boot() async {
     final token = await Session.loadToken();
+    String? status;
+    if (token != null) {
+      try {
+        final me = await ApiClient(token: token).onboardingStatus();
+        status = me['registrationStatus'] as String?;
+      } catch (_) {
+        status = 'APPROVED';
+      }
+    }
     setState(() {
       _token = token;
+      _registrationStatus = status;
       _loading = false;
       _showWelcome = token == null;
     });
@@ -56,7 +72,9 @@ class _AppGateState extends State<AppGate> {
     await Session.clear();
     setState(() {
       _token = null;
+      _registrationStatus = null;
       _showWelcome = true;
+      _registering = false;
     });
   }
 
@@ -69,7 +87,29 @@ class _AppGateState extends State<AppGate> {
       if (_showWelcome) {
         return WelcomeScreen(onGetStarted: () => setState(() => _showWelcome = false));
       }
-      return AuthScreen(onAuthenticated: _boot);
+      if (_registering) {
+        return RegisterAccountScreen(
+          isDriver: false,
+          onRegistered: (token) async {
+            await Session.save(token, 'Rider');
+            setState(() { _token = token; _registering = false; _registrationStatus = 'NIN_PENDING'; });
+          },
+        );
+      }
+      return AuthScreen(
+        onAuthenticated: _boot,
+        onRegister: () => setState(() => _registering = true),
+      );
+    }
+    if (_registrationStatus != 'APPROVED') {
+      if (_registrationStatus == 'AWAITING_APPROVAL') {
+        return PendingApprovalScreen(onLogout: _logout);
+      }
+      return OnboardingScreen(
+        token: _token!,
+        isDriver: false,
+        onComplete: _boot,
+      );
     }
     return RiderShell(token: _token!, onLogout: _logout);
   }
@@ -89,6 +129,19 @@ class _RiderShellState extends State<RiderShell> {
   int _index = 0;
 
   @override
+  void initState() {
+    super.initState();
+    _checkActive();
+  }
+
+  Future<void> _checkActive() async {
+    final ride = await ApiClient(token: widget.token).activeRide();
+    if (mounted && ride != null) {
+      Navigator.push(context, MaterialPageRoute(builder: (_) => ActiveRideScreen(token: widget.token)));
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final pages = [
       HomeScreen(token: widget.token),
@@ -100,13 +153,7 @@ class _RiderShellState extends State<RiderShell> {
       appBar: AppBar(
         title: Row(
           children: [
-            Container(
-              width: 32,
-              height: 32,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(color: Brand.primary, borderRadius: BorderRadius.circular(8)),
-              child: const Text('JR', style: TextStyle(fontWeight: FontWeight.bold, color: Brand.accent, fontSize: 12)),
-            ),
+            Image.asset('assets/branding/logo-mark.png', height: 28),
             const SizedBox(width: 10),
             const Text('Jala Ride'),
           ],
@@ -116,8 +163,6 @@ class _RiderShellState extends State<RiderShell> {
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
         onDestinationSelected: (i) => setState(() => _index = i),
-        backgroundColor: Brand.surface,
-        indicatorColor: Brand.primary.withValues(alpha: 0.3),
         destinations: const [
           NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home), label: 'Home'),
           NavigationDestination(icon: Icon(Icons.history), label: 'Trips'),

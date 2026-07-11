@@ -1,7 +1,13 @@
 import 'dart:async';
+import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../services/api_client.dart';
-import '../theme/app_theme.dart';
+import '../theme/tokens.dart';
+import '../widgets/design/design.dart';
+import 'driver_active_ride_screen.dart';
 
 class DriverHomeScreen extends StatefulWidget {
   const DriverHomeScreen({super.key, required this.token});
@@ -15,51 +21,74 @@ class DriverHomeScreen extends StatefulWidget {
 class _DriverHomeScreenState extends State<DriverHomeScreen> {
   bool _online = false;
   bool _busy = false;
-  List<dynamic> _jobs = [];
-  Map<String, dynamic>? _pendingRequest;
-  Timer? _demoTimer;
+  bool _loadingJobs = false;
+  List<dynamic> _offers = [];
+  Timer? _poll;
+  Timer? _heartbeat;
+  Timer? _alertSound;
+  LatLng _center = const LatLng(9.0765, 7.3986);
+  String? _modalOfferId;
+  bool _modalOpen = false;
 
   ApiClient get _api => ApiClient(token: widget.token);
 
   @override
+  void initState() {
+    super.initState();
+    _loadLocation();
+  }
+
+  @override
   void dispose() {
-    _demoTimer?.cancel();
+    _poll?.cancel();
+    _heartbeat?.cancel();
+    _alertSound?.cancel();
     super.dispose();
   }
 
-  Future<void> _toggleOnline() async {
+  Future<void> _loadLocation() async {
+    try {
+      var perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) perm = await Geolocator.requestPermission();
+      if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) return;
+      final p = await Geolocator.getCurrentPosition();
+      if (mounted) setState(() => _center = LatLng(p.latitude, p.longitude));
+    } catch (_) {}
+  }
+
+  Future<void> _sendHeartbeat() async {
+    try {
+      final p = await Geolocator.getCurrentPosition();
+      if (mounted) setState(() => _center = LatLng(p.latitude, p.longitude));
+      await _api.heartbeat(lat: p.latitude, lng: p.longitude);
+    } catch (_) {}
+  }
+
+  Future<void> _setOnline(bool value) async {
+    if (_busy) return;
     setState(() => _busy = true);
     try {
-      if (_online) {
+      if (!value) {
         await _api.goOffline();
-        _demoTimer?.cancel();
+        _poll?.cancel();
+        _heartbeat?.cancel();
+        _stopAlert();
         setState(() {
           _online = false;
-          _pendingRequest = null;
-          _jobs = [];
+          _offers = [];
         });
       } else {
         await _api.goOnline();
+        await _sendHeartbeat();
         setState(() => _online = true);
-        _demoTimer = Timer(const Duration(seconds: 2), () {
-          if (mounted && _online) {
-            setState(() {
-              _pendingRequest = {
-                'riderName': 'Chioma A.',
-                'pickup': 'Wuse Market, Abuja',
-                'distance': '1.2 km',
-                'fare': 1850,
-              };
-            });
-            _showRequestDialog();
-          }
-        });
-        await _loadJobs();
+        await _loadOffers();
+        _poll = Timer.periodic(const Duration(seconds: 3), (_) => _loadOffers());
+        _heartbeat = Timer.periodic(const Duration(seconds: 10), (_) => _sendHeartbeat());
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.toString()), backgroundColor: Brand.error),
+          SnackBar(content: Text(e.toString()), backgroundColor: Tokens.red500),
         );
       }
     } finally {
@@ -67,144 +96,525 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     }
   }
 
-  Future<void> _loadJobs() async {
-    try {
-      final jobs = await _api.availableRides();
-      if (mounted) setState(() => _jobs = jobs);
-    } catch (_) {}
+  void _startAlert() {
+    if (_alertSound != null) return;
+    _alertSound = Timer.periodic(const Duration(milliseconds: 800), (_) {
+      SystemSound.play(SystemSoundType.alert);
+      HapticFeedback.heavyImpact();
+    });
   }
 
-  void _showRequestDialog() {
-    final req = _pendingRequest;
-    if (req == null) return;
-    showDialog<void>(
+  void _stopAlert() {
+    _alertSound?.cancel();
+    _alertSound = null;
+  }
+
+  Future<void> _loadOffers() async {
+    setState(() => _loadingJobs = true);
+    try {
+      final offers = await _api.pendingOffers();
+      if (!mounted) return;
+      setState(() => _offers = offers);
+      if (offers.isNotEmpty && !_modalOpen) {
+        final first = offers.first as Map<String, dynamic>;
+        final id = first['id']?.toString();
+        if (id != null && id != _modalOfferId) {
+          _modalOfferId = id;
+          _showOfferModal(first);
+        }
+      } else if (offers.isEmpty) {
+        _stopAlert();
+        _modalOfferId = null;
+      }
+    } catch (_) {
+    } finally {
+      if (mounted) setState(() => _loadingJobs = false);
+    }
+  }
+
+  Future<void> _showOfferModal(Map<String, dynamic> offer) async {
+    if (_modalOpen || !mounted) return;
+    _modalOpen = true;
+    _startAlert();
+    final ride = offer['ride'] as Map<String, dynamic>? ?? {};
+    final rider = ride['rider'] as Map<String, dynamic>?;
+    final expiresAt = DateTime.tryParse(offer['expiresAt']?.toString() ?? '');
+    final secondsLeft = expiresAt != null
+        ? expiresAt.difference(DateTime.now()).inSeconds.clamp(1, 15)
+        : 15;
+
+    final accepted = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => TripRequestDialog(
-        request: req,
-        onDecline: () {
-          setState(() => _pendingRequest = null);
-          Navigator.pop(ctx);
-        },
-        onAccept: () {
-          setState(() => _pendingRequest = null);
-          Navigator.pop(ctx);
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Trip accepted!'), backgroundColor: Brand.success),
-          );
-        },
+      builder: (ctx) => _OfferDialog(
+        riderName: rider?['name']?.toString() ?? 'Rider',
+        fare: ride['fareEstimate'],
+        from: ride['originLabel']?.toString() ?? 'Pickup',
+        to: ride['destLabel']?.toString() ?? 'Destination',
+        seconds: secondsLeft,
+        onAccept: () => Navigator.pop(ctx, true),
+        onDecline: () => Navigator.pop(ctx, false),
       ),
     );
+
+    _stopAlert();
+    _modalOpen = false;
+    if (!mounted) return;
+    final offerId = offer['id'] as String?;
+    if (offerId == null) return;
+    if (accepted == true) {
+      await _acceptOffer(offerId);
+    } else if (accepted == false) {
+      try {
+        await _api.declineOffer(offerId);
+      } catch (_) {}
+      await _loadOffers();
+    }
+  }
+
+  Future<void> _acceptOffer(String offerId) async {
+    setState(() => _busy = true);
+    try {
+      await _api.acceptOffer(offerId);
+      if (mounted) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => DriverActiveRideScreen(token: widget.token)),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString()), backgroundColor: Tokens.red500),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _accept(String id) async {
+    // Legacy ride-id accept
+    setState(() => _busy = true);
+    try {
+      await _api.acceptRide(id);
+      if (mounted) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => DriverActiveRideScreen(token: widget.token)),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString()), backgroundColor: Tokens.red500),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    final mapHeight = MediaQuery.of(context).size.height * 0.48;
+    return Column(
+      children: [
+        SizedBox(
+          height: mapHeight,
+          child: Stack(
+            clipBehavior: Clip.none,
             children: [
-              const Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Earnings today', style: TextStyle(color: Brand.textSecondary)),
-                  Text('₦12,400', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800, color: Brand.accent)),
-                ],
+              GoogleMap(
+                initialCameraPosition: CameraPosition(target: _center, zoom: 14),
+                myLocationEnabled: true,
+                myLocationButtonEnabled: false,
+                zoomControlsEnabled: false,
+                markers: {
+                  Marker(
+                    markerId: const MarkerId('me'),
+                    position: _center,
+                    icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueYellow),
+                  ),
+                },
+                onMapCreated: (_) {},
               ),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Brand.surface,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Brand.primary.withValues(alpha: 0.3)),
-                ),
-                child: const Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
+              Positioned(
+                left: 16,
+                right: 16,
+                bottom: -56,
+                child: Column(
                   children: [
-                    Text('JA-234-ABA', style: TextStyle(fontWeight: FontWeight.w700)),
-                    Text('Toyota Corolla', style: TextStyle(color: Brand.textSecondary, fontSize: 12)),
+                    ToggleSwitchCard(
+                      online: _online,
+                      onChanged: _busy ? (_) {} : _setOnline,
+                      subtitle: _busy ? 'Updating…' : (_online ? 'Receiving nearby requests' : 'Go online to get rides'),
+                    ),
+                    const SizedBox(height: 8),
+                    const Row(
+                      children: [
+                        Expanded(child: StatChip(value: '₦0', label: 'today (sample)', accent: Tokens.gold500)),
+                        SizedBox(width: 8),
+                        Expanded(child: StatChip(value: '0', label: 'trips today', accent: Tokens.green500)),
+                      ],
+                    ),
                   ],
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 24),
-          ElevatedButton(
-            onPressed: _busy ? null : _toggleOnline,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _online ? Brand.error : Brand.primary,
-              minimumSize: const Size.fromHeight(56),
-            ),
-            child: Text(_busy ? '…' : (_online ? 'Go Offline' : 'Go Online')),
-          ),
-          if (_online) ...[
-            const SizedBox(height: 24),
-            const Text('Available jobs', style: TextStyle(fontWeight: FontWeight.w700)),
-            const SizedBox(height: 8),
-            if (_jobs.isEmpty)
-              const Text('Waiting for ride requests…', style: TextStyle(color: Brand.textSecondary))
-            else
-              ..._jobs.map((j) {
-                final m = j as Map<String, dynamic>;
-                return Card(
-                  child: ListTile(
-                    title: Text(m['destLabel']?.toString() ?? 'Ride'),
-                    subtitle: Text('₦${m['fareEstimate'] ?? '—'}'),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.check_circle, color: Brand.success),
-                      onPressed: () => _api.acceptRide(m['id'].toString()),
+        ),
+        const SizedBox(height: 72),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+            children: [
+              const Text('Ride requests', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 12),
+              if (!_online)
+                const EmptyState(
+                  icon: Icons.radar,
+                  headline: 'Go online to see requests',
+                  subtext: 'Toggle online above to start receiving ride requests near you.',
+                )
+              else if (_loadingJobs && _offers.isEmpty)
+                const Column(
+                  children: [
+                    SkeletonBox(height: 88, width: double.infinity, radius: 16),
+                    SizedBox(height: 12),
+                    SkeletonBox(height: 88, width: double.infinity, radius: 16),
+                  ],
+                )
+              else if (_offers.isEmpty)
+                const EmptyState(
+                  icon: Icons.radar,
+                  headline: 'Looking for ride requests near you',
+                  subtext: "You'll get an alert the moment a nearby offer is dispatched to you.",
+                )
+              else
+                ..._offers.map((j) {
+                  final offer = j as Map<String, dynamic>;
+                  final ride = offer['ride'] as Map<String, dynamic>? ?? offer;
+                  final rider = ride['rider'] as Map<String, dynamic>?;
+                  final offerId = offer['id']?.toString();
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: AppCard(
+                      elevated: true,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              AppAvatar(name: rider?['name']?.toString() ?? 'Rider', size: 40, verified: true),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      rider?['name']?.toString() ?? 'Rider',
+                                      style: const TextStyle(fontWeight: FontWeight.w700),
+                                    ),
+                                    Text(
+                                      '₦${ride['fareEstimate'] ?? '—'}',
+                                      style: const TextStyle(color: Tokens.gold500, fontWeight: FontWeight.w600),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const StatusPill(label: 'OFFER', tone: StatusTone.warning),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          Text('From: ${ride['originLabel'] ?? 'Pickup'}', style: const TextStyle(color: Tokens.textSecondary)),
+                          Text('To: ${ride['destLabel'] ?? 'Destination'}', style: const TextStyle(color: Tokens.textSecondary)),
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: AppButton(
+                                  label: 'Decline',
+                                  variant: AppButtonVariant.secondary,
+                                  onPressed: () async {
+                                    if (offerId != null) {
+                                      try {
+                                        await _api.declineOffer(offerId);
+                                      } catch (_) {}
+                                      await _loadOffers();
+                                    }
+                                  },
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: AppButton(
+                                  label: 'Accept',
+                                  loading: _busy,
+                                  onPressed: () {
+                                    if (offerId != null) {
+                                      _acceptOffer(offerId);
+                                    } else {
+                                      _accept(ride['id'] as String);
+                                    }
+                                  },
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                );
-              }),
-          ],
-        ],
-      ),
+                  );
+                }),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
 
-class TripRequestDialog extends StatelessWidget {
-  const TripRequestDialog({
-    super.key,
-    required this.request,
+class _OfferDialog extends StatefulWidget {
+  const _OfferDialog({
+    required this.riderName,
+    required this.fare,
+    required this.from,
+    required this.to,
+    required this.seconds,
     required this.onAccept,
     required this.onDecline,
   });
 
-  final Map<String, dynamic> request;
+  final String riderName;
+  final Object? fare;
+  final String from;
+  final String to;
+  final int seconds;
   final VoidCallback onAccept;
   final VoidCallback onDecline;
 
   @override
+  State<_OfferDialog> createState() => _OfferDialogState();
+}
+
+class _OfferDialogState extends State<_OfferDialog> {
+  late int _left;
+  Timer? _t;
+
+  @override
+  void initState() {
+    super.initState();
+    _left = widget.seconds;
+    _t = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_left <= 1) {
+        _t?.cancel();
+        widget.onDecline();
+      } else {
+        setState(() => _left--);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _t?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Dialog(
-      backgroundColor: Brand.surface,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+    return AlertDialog(
+      backgroundColor: Tokens.bgSurface,
+      title: Text('New ride · ${_left}s'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(widget.riderName, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 18)),
+          const SizedBox(height: 8),
+          Text('₦${widget.fare ?? '—'}', style: const TextStyle(color: Tokens.gold500, fontSize: 22, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 12),
+          Text('From: ${widget.from}', style: const TextStyle(color: Tokens.textSecondary)),
+          Text('To: ${widget.to}', style: const TextStyle(color: Tokens.textSecondary)),
+          const SizedBox(height: 12),
+          LinearProgressIndicator(
+            value: _left / widget.seconds,
+            color: Tokens.gold500,
+            backgroundColor: Tokens.bgSurface2,
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(onPressed: widget.onDecline, child: const Text('Decline')),
+        FilledButton(
+          onPressed: widget.onAccept,
+          style: FilledButton.styleFrom(backgroundColor: Tokens.gold500, foregroundColor: Colors.black),
+          child: const Text('Accept'),
+        ),
+      ],
+    );
+  }
+}
+
+class EarningsScreen extends StatefulWidget {
+  const EarningsScreen({super.key, this.token});
+
+  final String? token;
+
+  @override
+  State<EarningsScreen> createState() => _EarningsScreenState();
+}
+
+class _EarningsScreenState extends State<EarningsScreen> {
+  int _segment = 1; // 0 today, 1 week, 2 month
+  List<dynamic> _rides = [];
+  bool _loading = true;
+
+  static const _sampleBars = [1200.0, 3400.0, 2100.0, 4500.0, 1800.0, 5200.0, 3900.0];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    if (widget.token == null) {
+      setState(() => _loading = false);
+      return;
+    }
+    try {
+      final rides = await ApiClient(token: widget.token).myRides();
+      if (mounted) setState(() => _rides = rides);
+    } catch (_) {
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  double get _sampleTotal {
+    switch (_segment) {
+      case 0:
+        return 3900;
+      case 2:
+        return 48200;
+      default:
+        return _sampleBars.reduce((a, b) => a + b);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        SegmentedButton<int>(
+          segments: const [
+            ButtonSegment(value: 0, label: Text('Today')),
+            ButtonSegment(value: 1, label: Text('Week')),
+            ButtonSegment(value: 2, label: Text('Month')),
+          ],
+          selected: {_segment},
+          onSelectionChanged: (s) => setState(() => _segment = s.first),
+        ),
+        const SizedBox(height: 20),
+        Text(
+          '₦${_sampleTotal.toStringAsFixed(0)}',
+          style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w800, color: Tokens.gold500),
+        ),
+        const Row(
           children: [
-            const Text('New trip request', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
-            const SizedBox(height: 16),
-            Text(request['riderName']?.toString() ?? 'Rider', style: const TextStyle(fontSize: 18)),
-            Text(request['pickup']?.toString() ?? '', style: const TextStyle(color: Brand.textSecondary)),
-            Text('${request['distance']} · ₦${request['fare']}', style: const TextStyle(color: Brand.accent)),
-            const SizedBox(height: 24),
-            Row(
-              children: [
-                Expanded(child: OutlinedButton(onPressed: onDecline, child: const Text('Decline'))),
-                const SizedBox(width: 12),
-                Expanded(child: ElevatedButton(onPressed: onAccept, child: const Text('Accept'))),
-              ],
-            ),
+            Icon(Icons.trending_up, size: 16, color: Tokens.green500),
+            SizedBox(width: 4),
+            Text('+12% vs prior (sample)', style: TextStyle(color: Tokens.textSecondary, fontSize: 13)),
           ],
         ),
-      ),
+        const SizedBox(height: 8),
+        const Text('Sample earnings — not live payout data', style: TextStyle(color: Tokens.textTertiary, fontSize: 12)),
+        const SizedBox(height: 20),
+        AppCard(
+          child: SizedBox(
+            height: 180,
+            child: BarChart(
+              BarChartData(
+                borderData: FlBorderData(show: false),
+                gridData: const FlGridData(show: false),
+                titlesData: FlTitlesData(
+                  leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  bottomTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      getTitlesWidget: (v, _) {
+                        const days = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+                        final i = v.toInt();
+                        if (i < 0 || i > 6) return const SizedBox.shrink();
+                        return Text(days[i], style: const TextStyle(color: Tokens.textTertiary, fontSize: 11));
+                      },
+                    ),
+                  ),
+                ),
+                barGroups: List.generate(
+                  7,
+                  (i) => BarChartGroupData(
+                    x: i,
+                    barRods: [
+                      BarChartRodData(
+                        toY: _sampleBars[i],
+                        color: Tokens.gold500,
+                        width: 14,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 20),
+        const Text('Trips', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 12),
+        if (_loading)
+          const SkeletonBox(height: 72, width: double.infinity, radius: 16)
+        else if (_rides.isEmpty)
+          const EmptyState(
+            icon: Icons.payments_outlined,
+            headline: 'No completed trips yet',
+            subtext: 'Accepted rides will show fare breakdown here.',
+          )
+        else
+          ..._rides.take(20).map((r) {
+            final ride = r as Map<String, dynamic>;
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: AppCard(
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(ride['destLabel']?.toString() ?? 'Trip', style: const TextStyle(fontWeight: FontWeight.w600)),
+                          Text(
+                            '${ride['originLabel'] ?? 'Pickup'} → ${ride['status'] ?? ''}',
+                            style: const TextStyle(color: Tokens.textSecondary, fontSize: 13),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Text(
+                      '₦${ride['fareEstimate'] ?? ride['fareFinal'] ?? '—'}',
+                      style: const TextStyle(color: Tokens.gold500, fontWeight: FontWeight.w700),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }),
+      ],
     );
   }
 }
@@ -214,78 +624,83 @@ class RemittanceScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('Weekly remittance', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
-          const SizedBox(height: 8),
-          const Text('Government fleet — Toyota Corolla 2021', style: TextStyle(color: Brand.textSecondary)),
-          const SizedBox(height: 24),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+    const remitted = 18500.0;
+    const target = 25000.0;
+    final progress = remitted / target;
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        AppCard(
+          elevated: true,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Weekly remittance', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 4),
+              const Text('Sample target — Paystack not wired yet', style: TextStyle(color: Tokens.textTertiary, fontSize: 12)),
+              const SizedBox(height: 16),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: LinearProgressIndicator(
+                  value: progress,
+                  minHeight: 12,
+                  backgroundColor: Tokens.bgSurface2,
+                  color: Tokens.gold500,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text('Due this week', style: TextStyle(color: Brand.textSecondary)),
-                  const Text('₦76,923', style: TextStyle(fontSize: 32, fontWeight: FontWeight.w800, color: Brand.accent)),
-                  const SizedBox(height: 8),
-                  const Text('Status: Pending', style: TextStyle(color: Brand.error)),
-                  const SizedBox(height: 16),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(onPressed: () {}, child: const Text('Mark as paid')),
+                  Text('₦${remitted.toStringAsFixed(0)} / ₦${target.toStringAsFixed(0)}',
+                      style: const TextStyle(fontWeight: FontWeight.w600)),
+                  const Text('Due in 3 days (sample)', style: TextStyle(color: Tokens.textSecondary, fontSize: 13)),
+                ],
+              ),
+              const SizedBox(height: 16),
+              AppButton(
+                label: 'Pay now',
+                onPressed: () {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Paystack wiring coming — not charged')),
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 24),
+        const Text('Payment history', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 12),
+        ...[
+          ('Sample remittance', '₦25,000', StatusTone.success, 'Paid'),
+          ('Sample remittance', '₦25,000', StatusTone.warning, 'Pending'),
+          ('Sample remittance', '₦18,500', StatusTone.danger, 'Overdue'),
+        ].map(
+          (row) => Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: AppCard(
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(row.$1, style: const TextStyle(fontWeight: FontWeight.w600)),
+                        const Text('Sample row', style: TextStyle(color: Tokens.textTertiary, fontSize: 12)),
+                      ],
+                    ),
                   ),
+                  Text(row.$2, style: const TextStyle(fontWeight: FontWeight.w700)),
+                  const SizedBox(width: 8),
+                  StatusPill(label: row.$4, tone: row.$3),
                 ],
               ),
             ),
           ),
-        ],
-      ),
-    );
-  }
-}
-
-class EarningsScreen extends StatelessWidget {
-  const EarningsScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return const Padding(
-      padding: EdgeInsets.all(24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('This week', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
-          SizedBox(height: 16),
-          _StatRow(label: 'Completed trips', value: '18'),
-          _StatRow(label: 'Gross revenue', value: '₦48,200'),
-          _StatRow(label: 'Est. payout', value: '₦31,500'),
-        ],
-      ),
-    );
-  }
-}
-
-class _StatRow extends StatelessWidget {
-  const _StatRow({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label, style: const TextStyle(color: Brand.textSecondary)),
-          Text(value, style: const TextStyle(fontWeight: FontWeight.w700)),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }

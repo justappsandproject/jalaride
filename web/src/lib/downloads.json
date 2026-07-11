@@ -1,6 +1,8 @@
 {
   "riderApk": "/downloads/jala-ride-rider.apk",
   "riderAab": "/downloads/jala-ride-rider.aab",
+  "riderIpa": "/downloads/jala-ride-rider.ipa",
   "driverApk": "/downloads/jala-ride-driver.apk",
-  "driverAab": "/downloads/jala-ride-driver.aab"
+  "driverAab": "/downloads/jala-ride-driver.aab",
+  "driverIpa": "/downloads/jala-ride-driver.ipa"
 }

@@ -26,7 +26,9 @@ class WelcomeScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _logo(),
+                  Image.asset('assets/branding/logo-mark.png', height: 56),
+                  const SizedBox(height: 8),
+                  const Text('Jala Ride', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
                   const Spacer(),
                   const Text(
                     'Move with\nConfidence.',
@@ -42,7 +44,7 @@ class WelcomeScreen extends StatelessWidget {
                     width: double.infinity,
                     child: ElevatedButton(
                       onPressed: onGetStarted,
-                      child: const Text('Get Started'),
+                      child: const Text('Get Started as Rider'),
                     ),
                   ),
                 ],
@@ -51,25 +53,6 @@ class WelcomeScreen extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-
-  Widget _logo() {
-    return Row(
-      children: [
-        Container(
-          width: 48,
-          height: 48,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: Brand.primary,
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: const Text('JR', style: TextStyle(fontWeight: FontWeight.bold, color: Brand.accent, fontSize: 18)),
-        ),
-        const SizedBox(width: 12),
-        const Text('Jala Ride', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-      ],
     );
   }
 }

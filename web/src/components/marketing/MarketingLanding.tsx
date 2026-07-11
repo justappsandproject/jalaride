@@ -165,10 +165,14 @@ export function MarketingLanding() {
 
         <nav className="relative z-10 mx-auto flex max-w-6xl items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="relative flex h-11 w-11 items-center justify-center rounded-xl bg-primary font-bold text-accent shadow-lg shadow-primary/40">
-              JR
-              <span className="absolute -right-1 -top-1 h-3 w-3 rounded-full bg-accent animate-flash" />
-            </div>
+            <Image
+              src="/branding/logo-mark.png"
+              alt="Jala Ride"
+              width={44}
+              height={32}
+              className="h-11 w-auto"
+              priority
+            />
             <span className="text-xl font-bold">Jala Ride</span>
           </div>
           <div className="flex gap-3">
@@ -224,10 +228,10 @@ export function MarketingLanding() {
               <div className="absolute inset-0 flex items-center justify-center">
                 <div className="relative h-64 w-64 overflow-hidden rounded-3xl border border-white/10 bg-surface shadow-2xl shadow-primary/30 md:h-72 md:w-72">
                   <Image
-                    src="/images/hero-app.svg"
-                    alt="Jala Ride app preview"
+                    src="/branding/logo-banner.png"
+                    alt="Jala Ride — Move with Confidence"
                     fill
-                    className="object-cover"
+                    className="object-contain p-4"
                     priority
                   />
                   <div className="absolute inset-0 bg-gradient-to-t from-background/80 via-transparent to-transparent" />
@@ -373,25 +377,27 @@ export function MarketingLanding() {
           <Download className="mx-auto h-14 w-14 text-accent animate-float" />
           <h2 className="mt-6 text-3xl font-bold md:text-4xl">Get the Apps</h2>
           <p className="mx-auto mt-4 max-w-xl text-text-secondary">
-            Download directly for Android. iOS coming soon on the App Store.
+            Download directly for Android and iOS. Every build is signed and ready to install.
           </p>
           <div className="mt-12 grid gap-8 md:grid-cols-2">
             <div className="card-hover rounded-2xl border border-white/10 bg-background/50 p-8 backdrop-blur">
-              <Users className="mx-auto h-10 w-10 text-primary" />
+              <Image src="/branding/app-icon-light.png" alt="" width={56} height={56} className="mx-auto h-14 w-14 rounded-2xl object-contain" />
               <h3 className="mt-4 text-xl font-semibold">Jala Ride — Rider</h3>
               <p className="mt-2 text-sm text-text-secondary">Book verified rides across Nigeria</p>
-              <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
+              <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center sm:flex-wrap">
                 <DownloadButton href={appDownloads.riderApk} label="Download APK" variant="primary" />
                 <DownloadButton href={appDownloads.riderAab} label="Download AAB (Play Store)" variant="secondary" />
+                <DownloadButton href={appDownloads.riderIpa} label="Download IPA (iOS)" variant="secondary" />
               </div>
             </div>
             <div className="card-hover rounded-2xl border border-primary/30 bg-primary/10 p-8 backdrop-blur">
-              <Car className="mx-auto h-10 w-10 text-accent" />
+              <Image src="/branding/app-icon-dark.png" alt="" width={56} height={56} className="mx-auto h-14 w-14 rounded-2xl object-contain" />
               <h3 className="mt-4 text-xl font-semibold">Jala Ride Driver</h3>
               <p className="mt-2 text-sm text-text-secondary">Drive fleet vehicles & manage remittance</p>
-              <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
+              <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center sm:flex-wrap">
                 <DownloadButton href={appDownloads.driverApk} label="Download APK" variant="accent" />
                 <DownloadButton href={appDownloads.driverAab} label="Download AAB (Play Store)" variant="secondary" />
+                <DownloadButton href={appDownloads.driverIpa} label="Download IPA (iOS)" variant="secondary" />
               </div>
             </div>
           </div>
@@ -402,7 +408,7 @@ export function MarketingLanding() {
         <div className="mx-auto flex max-w-6xl flex-col gap-8 md:flex-row md:justify-between">
           <div>
             <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-sm font-bold text-accent">JR</div>
+              <Image src="/branding/logo-mark.png" alt="Jala Ride" width={32} height={24} className="h-8 w-auto" />
               <span className="font-bold">Jala Ride</span>
             </div>
             <p className="mt-2 text-sm text-text-secondary">© {new Date().getFullYear()} Jala Ride Technologies Ltd.</p>

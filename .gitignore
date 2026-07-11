@@ -34,3 +34,4 @@ rider-app/json/
 # Built mobile binaries (deploy via Vercel CLI after flutter build)
 web/public/downloads/*.apk
 web/public/downloads/*.aab
+web/public/downloads/*.ipa

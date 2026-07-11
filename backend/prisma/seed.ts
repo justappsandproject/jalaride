@@ -6,21 +6,26 @@ const prisma = new PrismaClient();
 async function main() {
   const phone = "+10000000000";
   const existing = await prisma.user.findUnique({ where: { phone } });
-  if (existing) {
+  if (!existing) {
+    const passwordHash = await bcrypt.hash("admin123", 10);
+    await prisma.user.create({
+      data: {
+        phone,
+        name: "Jala Ride Admin",
+        passwordHash,
+        role: UserRole.ADMIN,
+        registrationStatus: "APPROVED",
+        wallet: { create: {} },
+      },
+    });
+    console.log("Created admin:", phone, "/ admin123");
+  } else {
     console.log("Seed admin already exists");
-    return;
   }
-  const passwordHash = await bcrypt.hash("admin123", 10);
-  await prisma.user.create({
-    data: {
-      phone,
-      name: "Jala Ride Admin",
-      passwordHash,
-      role: UserRole.ADMIN,
-      wallet: { create: {} },
-    },
+  await prisma.user.updateMany({
+    where: { registrationStatus: "NIN_PENDING", role: { not: "ADMIN" } },
+    data: { registrationStatus: "APPROVED" },
   });
-  console.log("Created admin:", phone, "/ admin123");
 }
 
 main()

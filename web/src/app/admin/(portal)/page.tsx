@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { formatNaira } from "@/lib/finance";
 import { DashboardCharts } from "@/components/admin/DashboardCharts";
+import { MobileAppAdminPanel } from "@/components/admin/MobileAppAdminPanel";
 
 export default async function AdminDashboard() {
   const supabase = createClient();
@@ -101,6 +102,11 @@ export default async function AdminDashboard() {
         remittanceWeeks={remittanceWeeks}
         categoryBreakdown={categoryBreakdown.length ? categoryBreakdown : [{ name: "Economy", value: 1 }]}
       />
+
+      <div className="mt-8 rounded-2xl border border-white/10 bg-surface p-6">
+        <h2 className="mb-4 font-semibold">Mobile app registrations (Render API)</h2>
+        <MobileAppAdminPanel />
+      </div>
 
       <div className="mt-8 rounded-2xl border border-white/10 bg-surface p-6">
         <h2 className="font-semibold">Recent Completions</h2>

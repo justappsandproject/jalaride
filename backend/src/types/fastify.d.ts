@@ -10,5 +10,6 @@ declare module "fastify" {
       driverId: string,
       payload: { lat: number; lng: number; heading?: number },
     ) => void;
+    broadcastDriverOffer?: (driverId: string, payload: unknown) => void;
   }
 }

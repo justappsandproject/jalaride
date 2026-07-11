@@ -1,6 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import bcrypt from "bcryptjs";
 import { RideStatus } from "@prisma/client";
+import { estimateFare } from "../services/fare.js";
+import { haversineKm, startDispatch } from "../services/dispatch.js";
 
 const createRide = z.object({
   originLat: z.number(),
@@ -10,18 +13,29 @@ const createRide = z.object({
   originLabel: z.string().optional(),
   destLabel: z.string().optional(),
   category: z.string().default("ECONOMY"),
+  distanceKm: z.number().optional(),
+  durationMin: z.number().optional(),
+  fareEstimate: z.number().optional(),
+  polyline: z.string().optional(),
 });
 
-function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
-  const R = 6371;
-  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
-  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
-  const lat1 = (a.lat * Math.PI) / 180;
-  const lat2 = (b.lat * Math.PI) / 180;
-  const x =
-    Math.sin(dLat / 2) ** 2 +
-    Math.sin(dLng / 2) ** 2 * Math.cos(lat1) * Math.cos(lat2);
-  return 2 * R * Math.asin(Math.sqrt(x));
+function generatePin() {
+  return String(Math.floor(1000 + Math.random() * 9000));
+}
+
+function sanitizeRide(ride: Record<string, unknown>, role: string, userId: string) {
+  const r = { ...ride };
+  const status = r.status as string;
+  const pinRevealed = status === "ARRIVED" || status === "PIN_CONFIRMED" || status === "IN_PROGRESS";
+  if (!pinRevealed) {
+    delete r.pickupPinPlain;
+    delete r.pickupPinHash;
+  } else if (role === "RIDER") {
+    delete r.pickupPinHash;
+  } else if (role === "DRIVER") {
+    delete r.pickupPinHash;
+  }
+  return r;
 }
 
 export async function rideRoutes(app: FastifyInstance) {
@@ -32,16 +46,24 @@ export async function rideRoutes(app: FastifyInstance) {
     if (user.role !== "RIDER") {
       return reply.status(403).send({ error: "Riders only" });
     }
+    const me = await app.prisma.user.findUnique({ where: { id: user.sub } });
+    if (me?.registrationStatus !== "APPROVED") {
+      return reply.status(403).send({ error: "Complete registration approval first" });
+    }
     const parsed = createRide.safeParse(req.body);
     if (!parsed.success) {
       return reply.status(400).send({ error: parsed.error.flatten() });
     }
     const d = parsed.data;
-    const km = haversineKm(
-      { lat: d.originLat, lng: d.originLng },
-      { lat: d.destLat, lng: d.destLng },
-    );
-    const fareEstimate = Math.max(3.5, Math.round((2.5 + km * 1.2) * 100) / 100);
+    const km =
+      d.distanceKm ??
+      haversineKm(
+        { lat: d.originLat, lng: d.originLng },
+        { lat: d.destLat, lng: d.destLng },
+      );
+    const durationMin = d.durationMin ?? Math.max(5, (km / 25) * 60);
+    const fareEstimate =
+      d.fareEstimate ?? estimateFare(d.category, km, durationMin);
     const ride = await app.prisma.ride.create({
       data: {
         riderId: user.sub,
@@ -53,31 +75,97 @@ export async function rideRoutes(app: FastifyInstance) {
         destLabel: d.destLabel,
         category: d.category,
         fareEstimate,
-        status: "REQUESTED",
+        distanceKm: Math.round(km * 100) / 100,
+        durationMin: Math.round(durationMin * 10) / 10,
+        polyline: d.polyline,
+        status: "SEARCHING",
+        searchRadiusKm: 5,
+        dispatchRound: 0,
       },
     });
-    app.broadcastRideUpdate?.(ride.id, { type: "ride_requested", ride });
+    app.broadcastRideUpdate?.(ride.id, { type: "ride_searching", ride });
+    await startDispatch(app, ride);
     return { ride };
+  });
+
+  app.post("/:id/retry", async (req, reply) => {
+    const user = req.user as { sub: string; role: string };
+    if (user.role !== "RIDER") return reply.status(403).send({ error: "Riders only" });
+    const { id } = req.params as { id: string };
+    const ride = await app.prisma.ride.findUnique({ where: { id } });
+    if (!ride || ride.riderId !== user.sub) return reply.status(404).send({ error: "Not found" });
+    if (ride.status !== "NO_DRIVER") {
+      return reply.status(400).send({ error: "Only NO_DRIVER rides can be retried" });
+    }
+    await app.prisma.rideOffer.deleteMany({ where: { rideId: id } });
+    const updated = await app.prisma.ride.update({
+      where: { id },
+      data: { status: "SEARCHING", searchRadiusKm: 5, dispatchRound: 0, driverId: null },
+    });
+    await startDispatch(app, updated);
+    return { ride: updated };
+  });
+
+  app.get("/active", async (req, reply) => {
+    const user = req.user as { sub: string; role: string };
+    let ride = null;
+    if (user.role === "RIDER") {
+      ride = await app.prisma.ride.findFirst({
+        where: {
+          riderId: user.sub,
+          status: { notIn: ["COMPLETED", "CANCELLED", "NO_DRIVER"] },
+        },
+        orderBy: { createdAt: "desc" },
+        include: { driver: { include: { user: true, vehicles: true } }, rider: true },
+      });
+    } else if (user.role === "DRIVER") {
+      const driver = await app.prisma.driver.findUnique({ where: { userId: user.sub } });
+      if (driver) {
+        ride = await app.prisma.ride.findFirst({
+          where: {
+            driverId: driver.id,
+            status: { notIn: ["COMPLETED", "CANCELLED", "NO_DRIVER"] },
+          },
+          orderBy: { createdAt: "desc" },
+          include: { driver: { include: { user: true, vehicles: true } }, rider: true },
+        });
+      }
+    }
+    if (!ride) return { ride: null };
+    return { ride: sanitizeRide(ride as unknown as Record<string, unknown>, user.role, user.sub) };
+  });
+
+  app.get("/:id", async (req, reply) => {
+    const user = req.user as { sub: string; role: string };
+    const { id } = req.params as { id: string };
+    const ride = await app.prisma.ride.findUnique({
+      where: { id },
+      include: { driver: { include: { user: true, vehicles: true } }, rider: true },
+    });
+    if (!ride) return reply.status(404).send({ error: "Not found" });
+    return { ride: sanitizeRide(ride as unknown as Record<string, unknown>, user.role, user.sub) };
   });
 
   app.get("/mine", async (req) => {
     const user = req.user as { sub: string; role: string };
     if (user.role === "RIDER") {
-      return app.prisma.ride.findMany({
+      const rides = await app.prisma.ride.findMany({
         where: { riderId: user.sub },
         orderBy: { createdAt: "desc" },
         take: 50,
         include: { driver: { include: { user: true, vehicles: true } } },
       });
+      return { rides };
     }
     const driver = await app.prisma.driver.findUnique({ where: { userId: user.sub } });
-    if (!driver) return [];
-    return app.prisma.ride.findMany({
+    if (!driver) return { rides: [] };
+    const rides = await app.prisma.ride.findMany({
       where: { driverId: driver.id },
       orderBy: { createdAt: "desc" },
       take: 50,
       include: { rider: true },
     });
+    return { rides };
   });
 
   app.get("/available", async (req, reply) => {
@@ -89,12 +177,22 @@ export async function rideRoutes(app: FastifyInstance) {
     if (!driver?.isOnline || driver.status !== "APPROVED") {
       return reply.status(400).send({ error: "Go online and be approved to see jobs" });
     }
-    return app.prisma.ride.findMany({
-      where: { status: "REQUESTED", driverId: null },
-      orderBy: { createdAt: "asc" },
-      take: 20,
-      include: { rider: { select: { id: true, name: true, phone: true } } },
+    // Legacy: pending offers for this driver (prefer /v1/driver/offers)
+    const offers = await app.prisma.rideOffer.findMany({
+      where: {
+        driverId: driver.id,
+        status: "PENDING",
+        expiresAt: { gt: new Date() },
+      },
+      include: {
+        ride: { include: { rider: { select: { id: true, name: true, phone: true } } } },
+      },
+      orderBy: { offeredAt: "asc" },
     });
+    return {
+      rides: offers.map((o) => o.ride),
+      offers,
+    };
   });
 
   app.post("/:id/accept", async (req, reply) => {
@@ -107,17 +205,61 @@ export async function rideRoutes(app: FastifyInstance) {
       return reply.status(403).send({ error: "Driver not approved" });
     }
     const { id } = req.params as { id: string };
+
+    // Prefer accepting via active offer; fall back to open SEARCHING/REQUESTED
+    const offer = await app.prisma.rideOffer.findFirst({
+      where: {
+        rideId: id,
+        driverId: driver.id,
+        status: "PENDING",
+        expiresAt: { gt: new Date() },
+      },
+    });
+
     const ride = await app.prisma.ride.findUnique({ where: { id } });
-    if (!ride || ride.status !== "REQUESTED") {
+    if (!ride || !["SEARCHING", "REQUESTED"].includes(ride.status) || ride.driverId) {
       return reply.status(404).send({ error: "Ride not available" });
     }
+    if (!offer && ride.status === "SEARCHING") {
+      // Allow accept only if this driver has an offer or legacy REQUESTED
+      return reply.status(404).send({ error: "No active offer for this ride" });
+    }
+
+    const pin = generatePin();
+    const pickupPinHash = await bcrypt.hash(pin, 8);
+
+    if (offer) {
+      await app.prisma.rideOffer.update({
+        where: { id: offer.id },
+        data: { status: "ACCEPTED", respondedAt: new Date() },
+      });
+      await app.prisma.rideOffer.updateMany({
+        where: { rideId: id, status: "PENDING", id: { not: offer.id } },
+        data: { status: "EXPIRED", respondedAt: new Date() },
+      });
+    }
+
     const updated = await app.prisma.ride.update({
       where: { id },
-      data: { driverId: driver.id, status: "MATCHED" },
+      data: {
+        driverId: driver.id,
+        status: "MATCHED",
+        pickupPinHash,
+        pickupPinPlain: pin,
+        pinRevealedAt: null,
+        riderPinConfirmed: false,
+        driverPinConfirmed: false,
+      },
       include: { rider: true, driver: { include: { user: true } } },
     });
-    app.broadcastRideUpdate?.(id, { type: "ride_matched", ride: updated });
-    return { ride: updated };
+    await app.prisma.driver.update({
+      where: { id: driver.id },
+      data: { availability: "ON_TRIP" },
+    });
+    const safe = sanitizeRide(updated as unknown as Record<string, unknown>, user.role, user.sub);
+    app.broadcastRideUpdate?.(id, { type: "ride_matched", ride: safe });
+    app.broadcastDriverOffer?.(driver.id, { type: "offer_accepted", rideId: id });
+    return { ride: safe, message: "Ride accepted. PIN will be revealed when you arrive." };
   });
 
   const transition = async (
@@ -126,6 +268,7 @@ export async function rideRoutes(app: FastifyInstance) {
     role: string,
     allowed: RideStatus[],
     next: RideStatus,
+    extra?: Record<string, unknown>,
   ) => {
     const ride = await app.prisma.ride.findUnique({
       where: { id },
@@ -142,23 +285,75 @@ export async function rideRoutes(app: FastifyInstance) {
     }
     const updated = await app.prisma.ride.update({
       where: { id },
-      data: { status: next },
-      include: { rider: true, driver: { include: { user: true } } },
+      data: { status: next, ...extra },
+      include: { rider: true, driver: { include: { user: true, vehicles: true } } },
     });
-    app.broadcastRideUpdate?.(id, { type: "ride_status", status: next, ride: updated });
-    return { ride: updated };
+    const safe = sanitizeRide(updated as unknown as Record<string, unknown>, role, userId);
+    app.broadcastRideUpdate?.(id, { type: "ride_status", status: next, ride: safe });
+    return { ride: safe };
   };
+
+  app.post("/:id/en-route", async (req, reply) => {
+    const user = req.user as { sub: string; role: string };
+    const { id } = req.params as { id: string };
+    const res = await transition(id, user.sub, user.role, ["MATCHED"], "DRIVER_EN_ROUTE");
+    if ("error" in res) return reply.status(400).send(res);
+    return res;
+  });
+
+  app.post("/:id/arrived", async (req, reply) => {
+    const user = req.user as { sub: string; role: string };
+    if (user.role !== "DRIVER") {
+      return reply.status(403).send({ error: "Drivers only" });
+    }
+    const { id } = req.params as { id: string };
+    const res = await transition(id, user.sub, user.role, ["DRIVER_EN_ROUTE", "MATCHED"], "ARRIVED", {
+      pinRevealedAt: new Date(),
+    });
+    if ("error" in res) return reply.status(400).send(res);
+    return {
+      ...res,
+      pickupPin: (res.ride as { pickupPinPlain?: string }).pickupPinPlain,
+      message: "Share this PIN with your rider to confirm pickup",
+    };
+  });
+
+  app.post("/:id/confirm-pin", async (req, reply) => {
+    const user = req.user as { sub: string; role: string };
+    const { id } = req.params as { id: string };
+    const ride = await app.prisma.ride.findUnique({ where: { id } });
+    if (!ride || ride.status !== "ARRIVED") {
+      return reply.status(400).send({ error: "Driver must mark arrived first" });
+    }
+    const data: { riderPinConfirmed?: boolean; driverPinConfirmed?: boolean; status?: RideStatus } = {};
+    if (user.role === "RIDER" && ride.riderId === user.sub) {
+      data.riderPinConfirmed = true;
+    } else if (user.role === "DRIVER") {
+      const d = await app.prisma.driver.findUnique({ where: { userId: user.sub } });
+      if (!d || ride.driverId !== d.id) return reply.status(403).send({ error: "Forbidden" });
+      data.driverPinConfirmed = true;
+    } else {
+      return reply.status(403).send({ error: "Forbidden" });
+    }
+    const riderOk = data.riderPinConfirmed || ride.riderPinConfirmed;
+    const driverOk = data.driverPinConfirmed || ride.driverPinConfirmed;
+    if (riderOk && driverOk) {
+      data.status = "PIN_CONFIRMED";
+    }
+    const updated = await app.prisma.ride.update({
+      where: { id },
+      data,
+      include: { rider: true, driver: { include: { user: true, vehicles: true } } },
+    });
+    const safe = sanitizeRide(updated as unknown as Record<string, unknown>, user.role, user.sub);
+    app.broadcastRideUpdate?.(id, { type: "pin_confirmed", ride: safe });
+    return { ride: safe, bothConfirmed: updated.status === "PIN_CONFIRMED" };
+  });
 
   app.post("/:id/start", async (req, reply) => {
     const user = req.user as { sub: string; role: string };
     const { id } = req.params as { id: string };
-    const res = await transition(
-      id,
-      user.sub,
-      user.role,
-      ["MATCHED", "DRIVER_EN_ROUTE"],
-      "IN_PROGRESS",
-    );
+    const res = await transition(id, user.sub, user.role, ["PIN_CONFIRMED"], "IN_PROGRESS");
     if ("error" in res) return reply.status(400).send(res);
     return res;
   });
@@ -170,6 +365,12 @@ export async function rideRoutes(app: FastifyInstance) {
     if (!ride) return reply.status(404).send({ error: "Not found" });
     const res = await transition(id, user.sub, user.role, ["IN_PROGRESS"], "COMPLETED");
     if ("error" in res) return reply.status(400).send(res);
+    if (ride.driverId) {
+      await app.prisma.driver.update({
+        where: { id: ride.driverId },
+        data: { availability: "ONLINE" },
+      });
+    }
     if (ride.fareEstimate != null) {
       const existing = await app.prisma.payment.findUnique({ where: { rideId: id } });
       if (!existing) {
@@ -194,21 +395,26 @@ export async function rideRoutes(app: FastifyInstance) {
     const user = req.user as { sub: string; role: string };
     const { id } = req.params as { id: string };
     const ride = await app.prisma.ride.findUnique({ where: { id } });
-    if (!ride) return reply.status(404).send({ error: "Not found" });
-    const allowed: RideStatus[] = ["REQUESTED", "MATCHED"];
-    if (user.role === "DRIVER" || user.role === "RIDER") {
-      const res = await transition(id, user.sub, user.role, allowed, "CANCELLED");
-      if ("error" in res) return reply.status(400).send(res);
-      return res;
-    }
-    return reply.status(403).send({ error: "Forbidden" });
-  });
-
-  app.post("/:id/en-route", async (req, reply) => {
-    const user = req.user as { sub: string; role: string };
-    const { id } = req.params as { id: string };
-    const res = await transition(id, user.sub, user.role, ["MATCHED"], "DRIVER_EN_ROUTE");
+    const allowed: RideStatus[] = [
+      "REQUESTED",
+      "SEARCHING",
+      "NO_DRIVER",
+      "MATCHED",
+      "DRIVER_EN_ROUTE",
+      "ARRIVED",
+    ];
+    const res = await transition(id, user.sub, user.role, allowed, "CANCELLED");
     if ("error" in res) return reply.status(400).send(res);
+    if (ride?.driverId) {
+      await app.prisma.driver.update({
+        where: { id: ride.driverId },
+        data: { availability: "ONLINE" },
+      });
+    }
+    await app.prisma.rideOffer.updateMany({
+      where: { rideId: id, status: "PENDING" },
+      data: { status: "EXPIRED", respondedAt: new Date() },
+    });
     return res;
   });
 }

@@ -38,13 +38,20 @@ export async function authRoutes(app: FastifyInstance) {
           ? { driverProfile: { create: { status: "PENDING" } } }
           : {}),
       },
-      select: { id: true, phone: true, name: true, role: true, createdAt: true },
+      select: {
+        id: true,
+        phone: true,
+        name: true,
+        role: true,
+        registrationStatus: true,
+        createdAt: true,
+      },
     });
     const token = await reply.jwtSign({
       sub: user.id,
       role: user.role,
     });
-    return { user, token };
+    return { user, token, registrationStatus: user.registrationStatus };
   });
 
   app.post("/login", async (req, reply) => {
@@ -67,6 +74,7 @@ export async function authRoutes(app: FastifyInstance) {
         phone: user.phone,
         name: user.name,
         role: user.role,
+        registrationStatus: user.registrationStatus,
         driverStatus: user.driverProfile?.status,
       },
     };
