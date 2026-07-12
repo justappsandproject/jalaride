@@ -18,7 +18,13 @@ const vehicleBody = z.object({
   make: z.string(),
   model: z.string(),
   plate: z.string(),
-  category: z.string().default("ECONOMY"),
+  category: z.string().default("EXECUTIVE"),
+});
+
+const onlineBody = z.object({
+  lat: z.number().optional(),
+  lng: z.number().optional(),
+  heading: z.number().optional(),
 });
 
 export async function driverRoutes(app: FastifyInstance) {
@@ -45,12 +51,42 @@ export async function driverRoutes(app: FastifyInstance) {
     if (user.role !== "DRIVER") {
       return reply.status(403).send({ error: "Drivers only" });
     }
+    const parsed = onlineBody.safeParse(req.body ?? {});
+    const body = parsed.success ? parsed.data : {};
+
+    const existing = await app.prisma.driver.findUnique({ where: { userId: user.sub } });
+    if (!existing) return reply.status(404).send({ error: "Not found" });
+    if (existing.status === "SUSPENDED" || existing.status === "REJECTED") {
+      return reply.status(403).send({ error: "Driver account is not eligible to go online" });
+    }
+
+    // Auto-promote PENDING → APPROVED so matching works after onboarding
+    // (admin can still suspend/reject later).
+    const nextStatus =
+      existing.status === "APPROVED" ? "APPROVED" : existing.status === "PENDING" ? "APPROVED" : existing.status;
+
+    // Clear stale ON_TRIP if there is no active ride
+    let availability: "ONLINE" | "ON_TRIP" = "ONLINE";
+    if (existing.availability === "ON_TRIP") {
+      const active = await app.prisma.ride.findFirst({
+        where: {
+          driverId: existing.id,
+          status: { notIn: ["COMPLETED", "CANCELLED", "NO_DRIVER"] },
+        },
+      });
+      if (active) availability = "ON_TRIP";
+    }
+
     const driver = await app.prisma.driver.update({
       where: { userId: user.sub },
       data: {
         isOnline: true,
-        availability: "ONLINE",
+        availability,
+        status: nextStatus,
         lastHeartbeat: new Date(),
+        ...(body.lat != null ? { lat: body.lat } : {}),
+        ...(body.lng != null ? { lng: body.lng } : {}),
+        ...(body.heading != null ? { heading: body.heading } : {}),
       },
     });
     return { driver };
@@ -168,8 +204,14 @@ export async function driverRoutes(app: FastifyInstance) {
       return reply.status(403).send({ error: "Drivers only" });
     }
     const driver = await app.prisma.driver.findUnique({ where: { userId: user.sub } });
-    if (!driver || driver.status !== "APPROVED") {
+    if (!driver || (driver.status !== "APPROVED" && driver.status !== "PENDING")) {
       return reply.status(403).send({ error: "Driver not approved" });
+    }
+    if (driver.status === "PENDING") {
+      await app.prisma.driver.update({
+        where: { id: driver.id },
+        data: { status: "APPROVED" },
+      });
     }
     const { id } = req.params as { id: string };
     const offer = await app.prisma.rideOffer.findUnique({ where: { id } });

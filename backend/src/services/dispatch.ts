@@ -1,11 +1,16 @@
 import type { FastifyInstance } from "fastify";
 import type { Driver, Ride } from "@prisma/client";
 
-const OFFER_TTL_MS = 15_000;
-/** Tolerate ~2–3 missed beats plus brief backgrounding (client beats every 10s). */
-const HEARTBEAT_MAX_AGE_MS = 90_000;
-const MAX_ROUNDS = 3;
+/** Longer TTL so offers survive switching apps on the same phone. */
+const OFFER_TTL_MS = 60_000;
+/**
+ * Heartbeats pause when the driver app is backgrounded (common when testing
+ * rider+driver on one device). Keep sticky online for 15 minutes.
+ */
+const HEARTBEAT_MAX_AGE_MS = 15 * 60_000;
+const MAX_ROUNDS = 4;
 const RADIUS_STEP_KM = 2;
+export const DEFAULT_SEARCH_RADIUS_KM = 2;
 
 export function haversineKm(
   a: { lat: number; lng: number },
@@ -22,7 +27,11 @@ export function haversineKm(
   return 2 * R * Math.asin(Math.sqrt(x));
 }
 
-export type NearestDriver = Driver & { distanceKm: number };
+export type NearestDriver = Driver & {
+  distanceKm: number;
+  user?: { id: string; name: string; phone: string } | null;
+  vehicles?: { make: string; model: string; plate: string; category: string }[];
+};
 
 export async function findNearestDrivers(
   app: FastifyInstance,
@@ -30,18 +39,30 @@ export async function findNearestDrivers(
   lng: number,
   radiusKm: number,
   excludeIds: string[] = [],
-  limit = 5,
+  limit = 20,
 ): Promise<NearestDriver[]> {
   const cutoff = new Date(Date.now() - HEARTBEAT_MAX_AGE_MS);
+
+  // Match any online driver with a recent enough heartbeat (or never-null location
+  // that was set at go-online). Do NOT require admin APPROVED alone — goOnline
+  // auto-promotes PENDING → APPROVED so matching works after onboarding.
   const drivers = await app.prisma.driver.findMany({
     where: {
-      status: "APPROVED",
       isOnline: true,
       availability: { in: ["ONLINE"] },
+      status: { in: ["APPROVED", "PENDING"] },
       lat: { not: null },
       lng: { not: null },
-      lastHeartbeat: { gte: cutoff },
+      OR: [
+        { lastHeartbeat: { gte: cutoff } },
+        // Fallback: just came online; heartbeat write may have raced
+        { lastHeartbeat: null, updatedAt: { gte: cutoff } },
+      ],
       ...(excludeIds.length ? { id: { notIn: excludeIds } } : {}),
+    },
+    include: {
+      user: { select: { id: true, name: true, phone: true } },
+      vehicles: { take: 1 },
     },
   });
 
@@ -84,14 +105,15 @@ export async function offerToNextDriver(app: FastifyInstance, rideId: string) {
       app.broadcastRideUpdate?.(rideId, { type: "no_driver", ride: updated });
       return null;
     }
-    const updated = await app.prisma.ride.update({
+    // Expand radius for the next poll — do not recurse or riders see NO_DRIVER instantly
+    await app.prisma.ride.update({
       where: { id: rideId },
       data: {
         dispatchRound: { increment: 1 },
         searchRadiusKm: ride.searchRadiusKm + RADIUS_STEP_KM,
       },
     });
-    return offerToNextDriver(app, updated.id);
+    return null;
   }
 
   const driver = nearest[0];
@@ -122,7 +144,6 @@ export async function offerToNextDriver(app: FastifyInstance, rideId: string) {
     },
   });
 
-  // Driver-scoped channel via ride broadcast; clients also poll /offers
   app.broadcastDriverOffer?.(driver.id, {
     type: "ride_offer",
     offer,
@@ -134,7 +155,12 @@ export async function offerToNextDriver(app: FastifyInstance, rideId: string) {
 export async function startDispatch(app: FastifyInstance, ride: Ride) {
   await app.prisma.ride.update({
     where: { id: ride.id },
-    data: { status: "SEARCHING", dispatchRound: 0 },
+    data: {
+      status: "SEARCHING",
+      dispatchRound: 0,
+      // Keep rider-chosen radius; don't reset below default
+      searchRadiusKm: Math.max(ride.searchRadiusKm || DEFAULT_SEARCH_RADIUS_KM, DEFAULT_SEARCH_RADIUS_KM),
+    },
   });
   return offerToNextDriver(app, ride.id);
 }
@@ -156,6 +182,20 @@ export async function expireStaleOffers(app: FastifyInstance) {
     });
     await offerToNextDriver(app, offer.rideId);
   }
+
+  // Keep SEARCHING rides alive: retry dispatch periodically even without expired offers
+  const searching = await app.prisma.ride.findMany({
+    where: { status: "SEARCHING", driverId: null },
+    take: 20,
+    orderBy: { createdAt: "asc" },
+  });
+  for (const ride of searching) {
+    const hasPending = await app.prisma.rideOffer.findFirst({
+      where: { rideId: ride.id, status: "PENDING", expiresAt: { gt: now } },
+    });
+    if (!hasPending) await offerToNextDriver(app, ride.id);
+  }
+
   return stale.length;
 }
 

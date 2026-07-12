@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
@@ -27,22 +28,30 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _name;
   bool _booking = false;
   bool _quoting = false;
-  String _rideType = 'ECONOMY';
   DirectionsQuote? _quote;
+  double _searchRadiusKm = 2;
+  List<Map<String, dynamic>> _nearbyDrivers = [];
+  Timer? _nearbyTimer;
+  GoogleMapController? _mapController;
 
   PlacesService get _places => PlacesService(token: widget.token);
+  ApiClient get _api => ApiClient(token: widget.token);
 
-  static const _rideTypes = [
-    ('ECONOMY', 'Economy', 'Affordable everyday', Icons.directions_car_outlined),
-    ('VERIFIED', 'Jala Verified', 'NIN-checked drivers', Icons.verified_outlined),
-    ('FLEET', 'Gov Fleet', 'Government vehicles', Icons.airport_shuttle_outlined),
-  ];
+  static const _radiusOptions = [2.0, 4.0, 6.0, 10.0];
 
   @override
   void initState() {
     super.initState();
     Session.loadName().then((n) => setState(() => _name = n));
     _loadLocation();
+    _nearbyTimer = Timer.periodic(const Duration(seconds: 8), (_) => _refreshNearbyDrivers());
+  }
+
+  @override
+  void dispose() {
+    _nearbyTimer?.cancel();
+    _mapController?.dispose();
+    super.dispose();
   }
 
   Future<void> _loadLocation() async {
@@ -54,6 +63,7 @@ class _HomeScreenState extends State<HomeScreen> {
           _current = const LatLng(9.0765, 7.3986);
           _origin = _current;
         });
+        await _refreshNearbyDrivers();
         return;
       }
       final p = await Geolocator.getCurrentPosition();
@@ -68,12 +78,34 @@ class _HomeScreenState extends State<HomeScreen> {
         _origin = pos;
         _originLabel = label;
       });
+      await _refreshNearbyDrivers();
+      _mapController?.animateCamera(CameraUpdate.newLatLngZoom(pos, 14));
     } catch (_) {
       setState(() {
         _current = const LatLng(9.0765, 7.3986);
         _origin = _current;
       });
+      await _refreshNearbyDrivers();
     }
+  }
+
+  Future<void> _refreshNearbyDrivers() async {
+    final origin = _origin ?? _current;
+    if (origin == null) return;
+    try {
+      final res = await _api.nearbyDrivers(
+        lat: origin.latitude,
+        lng: origin.longitude,
+        radiusKm: _searchRadiusKm,
+      );
+      final list = res['drivers'];
+      if (!mounted) return;
+      setState(() {
+        _nearbyDrivers = list is List
+            ? list.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList()
+            : [];
+      });
+    } catch (_) {}
   }
 
   Future<void> _pickPlace({required bool isOrigin}) async {
@@ -99,6 +131,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _destLabel = result.label;
       }
     });
+    if (isOrigin) await _refreshNearbyDrivers();
     await _refreshQuote();
   }
 
@@ -121,11 +154,14 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  int? _fareFor(String category) {
+  int? _executiveFare() {
     final fares = _quote?.fares;
     if (fares == null) return null;
     for (final f in fares) {
-      if (f['category'] == category) return (f['fare'] as num?)?.toInt();
+      final cat = f['category']?.toString();
+      if (cat == 'EXECUTIVE' || cat == 'ECONOMY' || cat == 'VERIFIED' || cat == 'FLEET') {
+        return (f['fare'] as num?)?.toInt();
+      }
     }
     return null;
   }
@@ -141,20 +177,20 @@ class _HomeScreenState extends State<HomeScreen> {
     final dest = _dest!;
     setState(() => _booking = true);
     try {
-      final api = ApiClient(token: widget.token);
-      final fare = _fareFor(_rideType)?.toDouble();
-      final res = await api.createRide(
+      final fare = _executiveFare()?.toDouble();
+      final res = await _api.createRide(
         originLat: origin.latitude,
         originLng: origin.longitude,
         destLat: dest.latitude,
         destLng: dest.longitude,
         originLabel: _originLabel,
         destLabel: _destLabel,
-        category: _rideType,
+        category: 'EXECUTIVE',
         distanceKm: _quote?.distanceKm,
         durationMin: _quote?.durationMin,
         fareEstimate: fare,
         polyline: _quote?.polyline,
+        searchRadiusKm: _searchRadiusKm,
       );
       final ride = res['ride'] as Map<String, dynamic>?;
       if (mounted && ride != null) {
@@ -176,29 +212,104 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Set<Marker> get _markers {
+    final origin = _origin ?? _current ?? const LatLng(9.0765, 7.3986);
+    final markers = <Marker>{
+      Marker(markerId: const MarkerId('me'), position: origin),
+      if (_dest != null)
+        Marker(
+          markerId: const MarkerId('dest'),
+          position: _dest!,
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+        ),
+    };
+    for (final d in _nearbyDrivers) {
+      final lat = (d['lat'] as num?)?.toDouble();
+      final lng = (d['lng'] as num?)?.toDouble();
+      final id = d['id']?.toString() ?? '$lat-$lng';
+      if (lat == null || lng == null) continue;
+      markers.add(
+        Marker(
+          markerId: MarkerId('driver-$id'),
+          position: LatLng(lat, lng),
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+          infoWindow: InfoWindow(
+            title: d['name']?.toString() ?? 'Driver',
+            snippet: '${(d['distanceKm'] as num?)?.toStringAsFixed(1) ?? '?'} km away',
+          ),
+        ),
+      );
+    }
+    return markers;
+  }
+
+  Set<Circle> get _circles {
+    final origin = _origin ?? _current;
+    if (origin == null) return {};
+    return {
+      Circle(
+        circleId: const CircleId('search'),
+        center: origin,
+        radius: _searchRadiusKm * 1000,
+        fillColor: Tokens.green500.withValues(alpha: 0.08),
+        strokeColor: Tokens.green500.withValues(alpha: 0.45),
+        strokeWidth: 2,
+      ),
+    };
+  }
+
   @override
   Widget build(BuildContext context) {
     final origin = _origin ?? _current ?? const LatLng(9.0765, 7.3986);
-    final mapHeight = MediaQuery.of(context).size.height * 0.38;
+    final mapHeight = MediaQuery.of(context).size.height * 0.4;
+    final fare = _executiveFare();
+    final driverCount = _nearbyDrivers.length;
 
     return Column(
       children: [
         SizedBox(
           height: mapHeight,
-          child: GoogleMap(
-            initialCameraPosition: CameraPosition(target: origin, zoom: 14),
-            myLocationEnabled: true,
-            zoomControlsEnabled: false,
-            markers: {
-              Marker(markerId: const MarkerId('me'), position: origin),
-              if (_dest != null)
-                Marker(
-                  markerId: const MarkerId('dest'),
-                  position: _dest!,
-                  icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+          child: Stack(
+            children: [
+              GoogleMap(
+                initialCameraPosition: CameraPosition(target: origin, zoom: 14),
+                myLocationEnabled: true,
+                zoomControlsEnabled: false,
+                markers: _markers,
+                circles: _circles,
+                onMapCreated: (c) => _mapController = c,
+              ),
+              Positioned(
+                left: 12,
+                right: 12,
+                top: 12,
+                child: Material(
+                  color: Tokens.bgSurface.withValues(alpha: 0.94),
+                  borderRadius: BorderRadius.circular(12),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.local_taxi, color: Tokens.green500, size: 18),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            driverCount == 0
+                                ? 'No drivers within ${_searchRadiusKm.toStringAsFixed(0)} km'
+                                : '$driverCount driver${driverCount == 1 ? '' : 's'} within ${_searchRadiusKm.toStringAsFixed(0)} km',
+                            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: _refreshNearbyDrivers,
+                          child: const Text('Refresh'),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-            },
-            onMapCreated: (_) {},
+              ),
+            ],
           ),
         ),
         Expanded(
@@ -246,41 +357,54 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ],
               const SizedBox(height: 16),
-              const Text('Choose a ride', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
-              const SizedBox(height: 10),
-              ..._rideTypes.map((t) {
-                final selected = _rideType == t.$1;
-                final fare = _fareFor(t.$1);
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: AppCard(
-                    color: selected ? Tokens.green100 : null,
-                    onTap: () => setState(() => _rideType = t.$1),
-                    child: Row(
-                      children: [
-                        Icon(t.$4, color: selected ? Tokens.green500 : Tokens.textSecondary),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(t.$2, style: const TextStyle(fontWeight: FontWeight.w700)),
-                              Text(t.$3, style: const TextStyle(color: Tokens.textSecondary, fontSize: 13)),
-                            ],
-                          ),
-                        ),
-                        Text(
-                          fare != null ? '₦$fare' : '—',
-                          style: const TextStyle(color: Tokens.gold500, fontWeight: FontWeight.w600, fontSize: 13),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              }),
+              const Text('Search radius', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
               const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                children: _radiusOptions.map((r) {
+                  final selected = _searchRadiusKm == r;
+                  return ChoiceChip(
+                    label: Text('${r.toStringAsFixed(0)} km'),
+                    selected: selected,
+                    selectedColor: Tokens.green100,
+                    onSelected: (_) async {
+                      setState(() => _searchRadiusKm = r);
+                      await _refreshNearbyDrivers();
+                    },
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 16),
+              const Text('Ride type', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 10),
+              AppCard(
+                color: Tokens.green100,
+                child: Row(
+                  children: [
+                    const Icon(Icons.airport_shuttle_outlined, color: Tokens.green500),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Jala Executive', style: TextStyle(fontWeight: FontWeight.w700)),
+                          Text(
+                            'Premium verified ride',
+                            style: TextStyle(color: Tokens.textSecondary, fontSize: 13),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Text(
+                      fare != null ? '₦$fare' : '—',
+                      style: const TextStyle(color: Tokens.gold500, fontWeight: FontWeight.w600, fontSize: 13),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
               AppButton(
-                label: _booking ? 'Requesting…' : 'Confirm ride',
+                label: _booking ? 'Requesting…' : 'Confirm Jala Executive',
                 loading: _booking,
                 onPressed: _booking ? null : _bookRide,
               ),

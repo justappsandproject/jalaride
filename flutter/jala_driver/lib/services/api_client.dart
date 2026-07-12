@@ -82,8 +82,12 @@ class ApiClient {
     return _decode(await _get(ApiConfig.uri('/v1/onboarding/status')));
   }
 
-  Future<void> goOnline() async {
-    await _post(ApiConfig.uri('/v1/driver/online'), {});
+  Future<void> goOnline({double? lat, double? lng, double? heading}) async {
+    await _post(ApiConfig.uri('/v1/driver/online'), {
+      if (lat != null) 'lat': lat,
+      if (lng != null) 'lng': lng,
+      if (heading != null) 'heading': heading,
+    });
   }
 
   Future<void> goOffline() async {

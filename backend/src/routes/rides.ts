@@ -3,7 +3,7 @@ import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { RideStatus } from "@prisma/client";
 import { estimateFare } from "../services/fare.js";
-import { haversineKm, startDispatch } from "../services/dispatch.js";
+import { DEFAULT_SEARCH_RADIUS_KM, findNearestDrivers, haversineKm, startDispatch } from "../services/dispatch.js";
 
 const createRide = z.object({
   originLat: z.number(),
@@ -12,11 +12,12 @@ const createRide = z.object({
   destLng: z.number(),
   originLabel: z.string().optional(),
   destLabel: z.string().optional(),
-  category: z.string().default("ECONOMY"),
+  category: z.string().default("EXECUTIVE"),
   distanceKm: z.number().optional(),
   durationMin: z.number().optional(),
   fareEstimate: z.number().optional(),
   polyline: z.string().optional(),
+  searchRadiusKm: z.number().min(1).max(30).optional(),
 });
 
 function generatePin() {
@@ -85,7 +86,8 @@ export async function rideRoutes(app: FastifyInstance) {
       );
     const durationMin = d.durationMin ?? Math.max(5, (km / 25) * 60);
     const fareEstimate =
-      d.fareEstimate ?? estimateFare(d.category, km, durationMin);
+      d.fareEstimate ?? estimateFare("EXECUTIVE", km, durationMin);
+    const searchRadiusKm = d.searchRadiusKm ?? DEFAULT_SEARCH_RADIUS_KM;
     const ride = await app.prisma.ride.create({
       data: {
         riderId: user.sub,
@@ -95,19 +97,63 @@ export async function rideRoutes(app: FastifyInstance) {
         destLng: d.destLng,
         originLabel: d.originLabel,
         destLabel: d.destLabel,
-        category: d.category,
+        category: "EXECUTIVE",
         fareEstimate,
         distanceKm: Math.round(km * 100) / 100,
         durationMin: Math.round(durationMin * 10) / 10,
         polyline: d.polyline,
         status: "SEARCHING",
-        searchRadiusKm: 5,
+        searchRadiusKm,
         dispatchRound: 0,
       },
     });
     app.broadcastRideUpdate?.(ride.id, { type: "ride_searching", ride });
     await startDispatch(app, ride);
     return { ride };
+  });
+
+  /** Nearby online drivers for the rider map */
+  app.get("/nearby-drivers", async (req, reply) => {
+    const user = req.user as { sub: string; role: string };
+    if (user.role !== "RIDER") return reply.status(403).send({ error: "Riders only" });
+    const q = z
+      .object({
+        lat: z.coerce.number(),
+        lng: z.coerce.number(),
+        radiusKm: z.coerce.number().min(1).max(30).default(DEFAULT_SEARCH_RADIUS_KM),
+      })
+      .safeParse(req.query);
+    if (!q.success) return reply.status(400).send({ error: "lat,lng required" });
+
+    const nearest = await findNearestDrivers(
+      app,
+      q.data.lat,
+      q.data.lng,
+      q.data.radiusKm,
+      [],
+      30,
+    );
+
+    return {
+      radiusKm: q.data.radiusKm,
+      count: nearest.length,
+      drivers: nearest.map((d) => ({
+        id: d.id,
+        lat: d.lat,
+        lng: d.lng,
+        heading: d.heading,
+        distanceKm: Math.round(d.distanceKm * 100) / 100,
+        rating: d.rating,
+        name: d.user?.name ?? "Driver",
+        vehicle: d.vehicles?.[0]
+          ? {
+              make: d.vehicles[0].make,
+              model: d.vehicles[0].model,
+              plate: d.vehicles[0].plate,
+            }
+          : null,
+      })),
+    };
   });
 
   app.post("/:id/retry", async (req, reply) => {
@@ -122,7 +168,12 @@ export async function rideRoutes(app: FastifyInstance) {
     await app.prisma.rideOffer.deleteMany({ where: { rideId: id } });
     const updated = await app.prisma.ride.update({
       where: { id },
-      data: { status: "SEARCHING", searchRadiusKm: 5, dispatchRound: 0, driverId: null },
+      data: {
+        status: "SEARCHING",
+        searchRadiusKm: ride.searchRadiusKm || DEFAULT_SEARCH_RADIUS_KM,
+        dispatchRound: 0,
+        driverId: null,
+      },
     });
     await startDispatch(app, updated);
     return { ride: updated };
@@ -157,17 +208,6 @@ export async function rideRoutes(app: FastifyInstance) {
     return { ride: sanitizeRide(ride as unknown as Record<string, unknown>, user.role, user.sub) };
   });
 
-  app.get("/:id", async (req, reply) => {
-    const user = req.user as { sub: string; role: string };
-    const { id } = req.params as { id: string };
-    const ride = await app.prisma.ride.findUnique({
-      where: { id },
-      include: { driver: { include: { user: true, vehicles: true } }, rider: true },
-    });
-    if (!ride) return reply.status(404).send({ error: "Not found" });
-    return { ride: sanitizeRide(ride as unknown as Record<string, unknown>, user.role, user.sub) };
-  });
-
   app.get("/mine", async (req) => {
     const user = req.user as { sub: string; role: string };
     if (user.role === "RIDER") {
@@ -196,8 +236,8 @@ export async function rideRoutes(app: FastifyInstance) {
       return reply.status(403).send({ error: "Drivers only" });
     }
     const driver = await app.prisma.driver.findUnique({ where: { userId: user.sub } });
-    if (!driver?.isOnline || driver.status !== "APPROVED") {
-      return reply.status(400).send({ error: "Go online and be approved to see jobs" });
+    if (!driver?.isOnline || (driver.status !== "APPROVED" && driver.status !== "PENDING")) {
+      return reply.status(400).send({ error: "Go online to see jobs" });
     }
     // Legacy: pending offers for this driver (prefer /v1/driver/offers)
     const offers = await app.prisma.rideOffer.findMany({
@@ -217,14 +257,31 @@ export async function rideRoutes(app: FastifyInstance) {
     };
   });
 
+  app.get("/:id", async (req, reply) => {
+    const user = req.user as { sub: string; role: string };
+    const { id } = req.params as { id: string };
+    const ride = await app.prisma.ride.findUnique({
+      where: { id },
+      include: { driver: { include: { user: true, vehicles: true } }, rider: true },
+    });
+    if (!ride) return reply.status(404).send({ error: "Not found" });
+    return { ride: sanitizeRide(ride as unknown as Record<string, unknown>, user.role, user.sub) };
+  });
+
   app.post("/:id/accept", async (req, reply) => {
     const user = req.user as { sub: string; role: string };
     if (user.role !== "DRIVER") {
       return reply.status(403).send({ error: "Drivers only" });
     }
     const driver = await app.prisma.driver.findUnique({ where: { userId: user.sub } });
-    if (!driver || driver.status !== "APPROVED") {
+    if (!driver || (driver.status !== "APPROVED" && driver.status !== "PENDING")) {
       return reply.status(403).send({ error: "Driver not approved" });
+    }
+    if (driver.status === "PENDING") {
+      await app.prisma.driver.update({
+        where: { id: driver.id },
+        data: { status: "APPROVED" },
+      });
     }
     const { id } = req.params as { id: string };
 

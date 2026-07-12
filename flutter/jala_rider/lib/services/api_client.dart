@@ -107,11 +107,12 @@ class ApiClient {
     required double destLng,
     String? originLabel,
     String? destLabel,
-    String category = 'ECONOMY',
+    String category = 'EXECUTIVE',
     double? distanceKm,
     double? durationMin,
     double? fareEstimate,
     String? polyline,
+    double searchRadiusKm = 2,
   }) async {
     return _decode(await _post(ApiConfig.uri('/v1/rides'), {
       'originLat': originLat,
@@ -125,7 +126,20 @@ class ApiClient {
       if (durationMin != null) 'durationMin': durationMin,
       if (fareEstimate != null) 'fareEstimate': fareEstimate,
       if (polyline != null) 'polyline': polyline,
+      'searchRadiusKm': searchRadiusKm,
     }));
+  }
+
+  Future<Map<String, dynamic>> nearbyDrivers({
+    required double lat,
+    required double lng,
+    double radiusKm = 2,
+  }) async {
+    return _decode(await _get(ApiConfig.uri('/v1/rides/nearby-drivers', {
+      'lat': lat.toString(),
+      'lng': lng.toString(),
+      'radiusKm': radiusKm.toString(),
+    })));
   }
 
   Future<Map<String, dynamic>> retryRide(String rideId) async {

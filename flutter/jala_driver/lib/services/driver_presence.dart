@@ -58,7 +58,12 @@ class DriverPresence extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
     try {
       if (value) {
-        await _api.goOnline();
+        try {
+          final p = await Geolocator.getCurrentPosition();
+          await _api.goOnline(lat: p.latitude, lng: p.longitude);
+        } catch (_) {
+          await _api.goOnline();
+        }
         online = true;
         availability = 'ONLINE';
         await _tickHeartbeat();
