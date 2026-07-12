@@ -10,7 +10,9 @@ services:
     runtime: node
     plan: free
     rootDir: backend
-    buildCommand: npm ci && npx prisma generate && npm run build
+    # Install with all deps (prisma/typescript are production deps). Prefer install over ci
+    # so a lock drift never hard-blocks free-tier deploys.
+    buildCommand: npm install && npx prisma generate && npm run build
     # Seed is best-effort so a seed hiccup never blocks the API coming up
     startCommand: npx prisma db push && (npx prisma db seed || true) && npm start
     healthCheckPath: /health
