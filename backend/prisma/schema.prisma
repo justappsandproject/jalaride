@@ -159,6 +159,10 @@ model Ride {
   driverPinConfirmed Boolean    @default(false)
   shareToken         String?    @unique
   shareExpiresAt     DateTime?
+  arrivedAt          DateTime?
+  waitExpiresAt      DateTime?
+  startedAt          DateTime?
+  completedAt        DateTime?
   createdAt          DateTime   @default(now())
   updatedAt          DateTime   @updatedAt
   payment            Payment?
@@ -185,14 +189,16 @@ model RideOffer {
 }
 
 model Payment {
-  id         String   @id @default(cuid())
-  rideId     String   @unique
-  ride       Ride     @relation(fields: [rideId], references: [id], onDelete: Cascade)
-  amount     Float
-  method     String
-  status     String   @default("PENDING")
-  gatewayRef String?
-  createdAt  DateTime @default(now())
+  id                 String    @id @default(cuid())
+  rideId             String    @unique
+  ride               Ride      @relation(fields: [rideId], references: [id], onDelete: Cascade)
+  amount             Float
+  method             String    @default("PENDING")
+  status             String    @default("PENDING")
+  gatewayRef         String?
+  confirmedByDriver  Boolean   @default(false)
+  confirmedAt        DateTime?
+  createdAt          DateTime  @default(now())
 }
 
 model Wallet {
@@ -234,11 +240,15 @@ model SosEvent {
 }
 
 model SafetyRecording {
-  id        String   @id @default(cuid())
-  rideId    String?
-  ride      Ride?    @relation(fields: [rideId], references: [id], onDelete: SetNull)
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now())
+  id          String    @id @default(cuid())
+  rideId      String?
+  ride        Ride?     @relation(fields: [rideId], references: [id], onDelete: SetNull)
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  active      Boolean   @default(true)
+  fileData    String?   @db.Text
+  mimeType    String?
+  durationSec Int?
+  endedAt     DateTime?
+  createdAt   DateTime  @default(now())
 }

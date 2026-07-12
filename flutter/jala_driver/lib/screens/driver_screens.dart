@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:audioplayers/audioplayers.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -27,6 +28,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   List<dynamic> _offers = [];
   Timer? _poll;
   Timer? _alertSound;
+  final AudioPlayer _offerPlayer = AudioPlayer();
   LatLng _center = const LatLng(9.0765, 7.3986);
   String? _modalOfferId;
   bool _modalOpen = false;
@@ -52,7 +54,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   void dispose() {
     widget.presence.removeListener(_onPresence);
     _poll?.cancel();
-    _alertSound?.cancel();
+    _stopAlert();
+    _offerPlayer.dispose();
     super.dispose();
   }
 
@@ -109,7 +112,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
 
   void _startAlert() {
     if (_alertSound != null) return;
-    _alertSound = Timer.periodic(const Duration(milliseconds: 800), (_) {
+    _offerPlayer.setReleaseMode(ReleaseMode.loop);
+    _offerPlayer.play(AssetSource('sounds/alert.wav'));
+    SystemSound.play(SystemSoundType.alert);
+    HapticFeedback.heavyImpact();
+    _alertSound = Timer.periodic(const Duration(milliseconds: 400), (_) {
       SystemSound.play(SystemSoundType.alert);
       HapticFeedback.heavyImpact();
     });
@@ -118,6 +125,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   void _stopAlert() {
     _alertSound?.cancel();
     _alertSound = null;
+    _offerPlayer.stop();
   }
 
   Future<void> _loadOffers() async {
@@ -127,6 +135,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       final offers = await _api.pendingOffers();
       if (!mounted) return;
       setState(() => _offers = offers);
+      if (offers.isNotEmpty) _startAlert();
       if (offers.isNotEmpty && !_modalOpen) {
         final first = offers.first as Map<String, dynamic>;
         final id = first['id']?.toString();
@@ -147,13 +156,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   Future<void> _showOfferModal(Map<String, dynamic> offer) async {
     if (_modalOpen || !mounted) return;
     _modalOpen = true;
-    _startAlert();
     final ride = offer['ride'] as Map<String, dynamic>? ?? {};
     final rider = ride['rider'] as Map<String, dynamic>?;
     final expiresAt = DateTime.tryParse(offer['expiresAt']?.toString() ?? '');
     final secondsLeft = expiresAt != null
-        ? expiresAt.difference(DateTime.now()).inSeconds.clamp(1, 15)
-        : 15;
+        ? expiresAt.difference(DateTime.now()).inSeconds.clamp(1, 60)
+        : 60;
 
     final accepted = await showDialog<bool>(
       context: context,

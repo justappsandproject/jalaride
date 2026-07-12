@@ -17,9 +17,20 @@ type Driver = {
   user: { name: string; phone: string; nin?: string; registrationStatus: string };
 };
 
+type SafetyRecording = {
+  id: string;
+  rideId?: string;
+  mimeType?: string;
+  durationSec?: number;
+  createdAt: string;
+  fileData?: string;
+  user?: { name?: string; phone?: string; role?: string };
+};
+
 export function MobileAppAdminPanel() {
   const [riders, setRiders] = useState<Rider[]>([]);
   const [drivers, setDrivers] = useState<Driver[]>([]);
+  const [recordings, setRecordings] = useState<SafetyRecording[]>([]);
   const [stats, setStats] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -28,14 +39,16 @@ export function MobileAppAdminPanel() {
     setLoading(true);
     setError(null);
     try {
-      const [s, r, d] = await Promise.all([
+      const [s, r, d, recordingsResponse] = await Promise.all([
         fetch("/api/mobile-admin?resource=stats").then((x) => x.json()),
         fetch("/api/mobile-admin?resource=riders").then((x) => x.json()),
         fetch("/api/mobile-admin?resource=drivers").then((x) => x.json()),
+        fetch("/api/mobile-admin?resource=recordings").then((x) => x.json()),
       ]);
       setStats(s);
       setRiders(r.riders ?? []);
       setDrivers(d.drivers ?? []);
+      setRecordings(recordingsResponse.recordings ?? []);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load");
     } finally {
@@ -96,6 +109,51 @@ export function MobileAppAdminPanel() {
                   <td className="p-3">{r.registrationStatus}</td>
                 </tr>
               ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2 className="mb-3 text-lg font-semibold">Recent safety recordings</h2>
+        <div className="overflow-x-auto rounded-xl border border-white/10">
+          <table className="w-full text-sm">
+            <thead className="bg-surface text-left text-text-secondary">
+              <tr>
+                <th className="p-3">Recorded by</th>
+                <th className="p-3">Ride</th>
+                <th className="p-3">Duration</th>
+                <th className="p-3">Time</th>
+                <th className="p-3">Audio</th>
+              </tr>
+            </thead>
+            <tbody>
+              {recordings.map((recording) => (
+                <tr key={recording.id} className="border-t border-white/5">
+                  <td className="p-3">
+                    {recording.user?.name ?? "Unknown"} · {recording.user?.role ?? "—"}
+                  </td>
+                  <td className="p-3">{recording.rideId ?? "—"}</td>
+                  <td className="p-3">{recording.durationSec != null ? `${recording.durationSec}s` : "—"}</td>
+                  <td className="p-3">{new Date(recording.createdAt).toLocaleString()}</td>
+                  <td className="p-3">
+                    {recording.fileData?.startsWith("data:") ? (
+                      <audio controls preload="none" src={recording.fileData}>
+                        <a href={recording.fileData}>Play recording</a>
+                      </audio>
+                    ) : (
+                      "Unavailable"
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {recordings.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="p-4 text-center text-text-secondary">
+                    No uploaded recordings.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

@@ -23,6 +23,9 @@ export async function GET(req: Request) {
     if (resource === "sos") {
       return NextResponse.json(await backendAdminFetch("/v1/admin/sos/recent"));
     }
+    if (resource === "recordings") {
+      return NextResponse.json(await backendAdminFetch("/v1/admin/recordings/recent"));
+    }
     return NextResponse.json({ error: "Unknown resource" }, { status: 400 });
   } catch (e) {
     return NextResponse.json(

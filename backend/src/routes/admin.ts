@@ -120,6 +120,33 @@ export async function adminRoutes(app: FastifyInstance) {
     return { events };
   });
 
+  app.get("/recordings/recent", async (req, reply) => {
+    if (!assertAdmin(req)) return reply.status(403).send({ error: "Admin only" });
+    const recordings = await app.prisma.safetyRecording.findMany({
+      where: { fileData: { not: null } },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+      include: {
+        user: { select: { id: true, name: true, phone: true, role: true } },
+        ride: { select: { id: true, status: true, originLabel: true, destLabel: true } },
+      },
+    });
+    return {
+      recordings: recordings.map((r) => ({
+        id: r.id,
+        rideId: r.rideId,
+        mimeType: r.mimeType,
+        durationSec: r.durationSec,
+        createdAt: r.createdAt,
+        endedAt: r.endedAt,
+        hasAudio: Boolean(r.fileData),
+        fileData: r.fileData,
+        user: r.user,
+        ride: r.ride,
+      })),
+    };
+  });
+
   app.get("/stats/overview", async (req, reply) => {
     if (!assertAdmin(req)) return reply.status(403).send({ error: "Admin only" });
     const [users, riders, drivers, pendingDrivers, ridesToday, sosToday] = await Promise.all([

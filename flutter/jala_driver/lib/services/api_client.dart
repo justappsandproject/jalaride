@@ -199,12 +199,31 @@ class ApiClient {
     }));
   }
 
-  Future<Map<String, dynamic>> toggleRecording({String? rideId, required bool active}) async {
+  Future<Map<String, dynamic>> uploadRecording({
+    String? rideId,
+    required bool active,
+    String? recordingId,
+    String? fileData,
+    String? mimeType,
+    int? durationSec,
+  }) async {
     return _decode(await _post(ApiConfig.uri('/v1/safety/recording'), {
       if (rideId != null) 'rideId': rideId,
       'active': active,
+      if (recordingId != null) 'recordingId': recordingId,
+      if (fileData != null) 'fileData': fileData,
+      if (mimeType != null) 'mimeType': mimeType,
+      if (durationSec != null) 'durationSec': durationSec,
     }));
   }
+
+  Future<List<dynamic>> listRecordings(String rideId) async {
+    final data = _decode(await _get(ApiConfig.uri('/v1/safety/recordings', {'rideId': rideId})));
+    return data['recordings'] is List ? data['recordings'] as List<dynamic> : [];
+  }
+
+  Future<Map<String, dynamic>> confirmPayment(String rideId) async =>
+      _decode(await _post(ApiConfig.uri('/v1/rides/$rideId/confirm-payment'), {}));
 
   Future<http.Response> _get(Uri uri) => _send(() => http.get(uri, headers: _headers));
 
@@ -215,11 +234,6 @@ class ApiClient {
     Object? lastError;
     for (var attempt = 1; attempt <= _maxAttempts; attempt++) {
       try {
-        if (attempt == 1) {
-          try {
-            await http.get(ApiConfig.uri('/health')).timeout(_timeout);
-          } catch (_) {}
-        }
         return await request().timeout(_timeout);
       } on SocketException catch (e) {
         lastError = e;
@@ -247,7 +261,8 @@ class ApiClient {
     final body = res.body.isEmpty ? <String, dynamic>{} : jsonDecode(res.body);
     if (res.statusCode >= 400) {
       final msg = body is Map ? (body['message'] ?? body['error'] ?? res.body) : res.body;
-      throw Exception(msg.toString());
+      final state = body is Map ? (body['current'] ?? body['status']) : null;
+      throw Exception(state == null ? msg.toString() : '$msg (current: $state)');
     }
     return body is Map<String, dynamic> ? body : {'data': body};
   }

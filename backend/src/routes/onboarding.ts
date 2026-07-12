@@ -70,7 +70,7 @@ export async function onboardingRoutes(app: FastifyInstance) {
     if (docType === "SELFIE") {
       await app.prisma.user.update({
         where: { id: user.sub },
-        data: { selfieUrl: fileData.slice(0, 500) },
+        data: { selfieUrl: fileData },
       });
     }
     return { document: { id: doc.id, docType: doc.docType, verified: doc.verified } };

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../services/api_client.dart';
 import '../theme/app_theme.dart';
 import '../widgets/safety_bar.dart';
@@ -25,19 +26,28 @@ class DriverActiveRideScreen extends StatefulWidget {
 class _DriverActiveRideScreenState extends State<DriverActiveRideScreen> {
   Map<String, dynamic>? _ride;
   Timer? _poll;
+  Timer? _waitTicker;
   final _pinController = TextEditingController();
   bool _ratingShown = false;
+  bool _allowPop = false;
+  int? _waitSeconds;
 
   @override
   void initState() {
     super.initState();
     _load();
     _poll = Timer.periodic(const Duration(seconds: 4), (_) => _load());
+    _waitTicker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted && _waitSeconds != null && _waitSeconds! > 0) {
+        setState(() => _waitSeconds = _waitSeconds! - 1);
+      }
+    });
   }
 
   @override
   void dispose() {
     _poll?.cancel();
+    _waitTicker?.cancel();
     _pinController.dispose();
     super.dispose();
   }
@@ -46,10 +56,21 @@ class _DriverActiveRideScreenState extends State<DriverActiveRideScreen> {
     try {
       final ride = await ApiClient(token: widget.token).activeRide();
       if (!mounted) return;
-      final prevStatus = _ride?['status'] as String?;
-      setState(() => _ride = ride);
+      if (ride != null) {
+        setState(() {
+          _ride = ride;
+          if (ride['waitSecondsLeft'] is num) {
+            _waitSeconds = (ride['waitSecondsLeft'] as num).toInt();
+          } else if (ride['status'] != 'ARRIVED') {
+            _waitSeconds = null;
+          }
+        });
+      }
       final status = ride?['status'] as String?;
-      if (status == 'COMPLETED' && !_ratingShown && prevStatus != 'COMPLETED') {
+      final payment = ride?['paymentSummary'] as Map<String, dynamic>?;
+      if (status == 'COMPLETED' &&
+          payment?['status'] == 'CAPTURED' &&
+          !_ratingShown) {
         _ratingShown = true;
         WidgetsBinding.instance.addPostFrameCallback((_) => _showRatingSheet());
       }
@@ -62,6 +83,48 @@ class _DriverActiveRideScreenState extends State<DriverActiveRideScreen> {
       await _load();
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+    }
+  }
+
+  Future<void> _startNavigation(String id, double lat, double lng) async {
+    await _action(() => ApiClient(token: widget.token).enRoute(id));
+    final uri = Uri.parse(
+      'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng&travelmode=driving',
+    );
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication) && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open Google Maps')),
+      );
+    }
+  }
+
+  Future<void> _arrived(String id) async {
+    await _action(() => ApiClient(token: widget.token).arrived(id));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Rider notified — 5 minute wait started')),
+      );
+    }
+  }
+
+  Future<void> _handleBack() async {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Trip still active')),
+    );
+    final minimize = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Minimize active trip?'),
+        content: const Text('The trip will continue. This does not cancel it.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Stay')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Minimize')),
+        ],
+      ),
+    );
+    if (minimize == true && mounted) {
+      setState(() => _allowPop = true);
+      Navigator.pop(context);
     }
   }
 
@@ -187,12 +250,33 @@ class _DriverActiveRideScreenState extends State<DriverActiveRideScreen> {
     final api = ApiClient(token: widget.token);
     final id = ride['id'] as String;
     final status = ride['status'] as String? ?? '';
+    final payment = ride['paymentSummary'] as Map<String, dynamic>?;
+    final paymentStatus = payment?['status']?.toString() ?? 'AWAITING_PAYMENT';
+    final active = const {
+          'MATCHED',
+          'DRIVER_EN_ROUTE',
+          'ARRIVED',
+          'PIN_CONFIRMED',
+          'IN_PROGRESS',
+        }.contains(status) ||
+        (status == 'COMPLETED' && paymentStatus != 'CAPTURED');
     final origin = LatLng((ride['originLat'] as num).toDouble(), (ride['originLng'] as num).toDouble());
     final dest = LatLng((ride['destLat'] as num).toDouble(), (ride['destLng'] as num).toDouble());
 
-    return Scaffold(
-      appBar: AppBar(title: Text('Trip · $status')),
-      body: Column(
+    return PopScope(
+      canPop: _allowPop || !active,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && active) _handleBack();
+      },
+      child: Scaffold(
+        appBar: AppBar(title: Text('Trip · $status')),
+        bottomNavigationBar: active || status == 'COMPLETED'
+            ? SafeArea(
+                minimum: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                child: SafetyBar(token: widget.token, rideId: id),
+              )
+            : null,
+        body: Column(
         children: [
           Expanded(
             child: GoogleMap(
@@ -205,18 +289,37 @@ class _DriverActiveRideScreenState extends State<DriverActiveRideScreen> {
               polylines: {Polyline(polylineId: const PolylineId('r'), points: [origin, dest], color: Brand.accent, width: 4)},
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
+          ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * .46),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Text('Rider: ${ride['rider']?['name'] ?? '—'}', style: const TextStyle(fontWeight: FontWeight.bold)),
                 Text('₦${ride['fareEstimate'] ?? '—'}', style: const TextStyle(color: Brand.accent, fontSize: 20)),
                 const SizedBox(height: 8),
+                if (status == 'ARRIVED' && _waitSeconds != null)
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Brand.accent.withValues(alpha: .12),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      'Rider wait time: ${(_waitSeconds! ~/ 60).toString().padLeft(2, '0')}:${(_waitSeconds! % 60).toString().padLeft(2, '0')}',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                if (status == 'ARRIVED') const SizedBox(height: 8),
                 if (status == 'MATCHED')
-                  ElevatedButton(onPressed: () => _action(() => api.enRoute(id)), child: const Text('Start navigation')),
+                  ElevatedButton(
+                    onPressed: () => _startNavigation(id, origin.latitude, origin.longitude),
+                    child: const Text('Start navigation'),
+                  ),
                 if (status == 'DRIVER_EN_ROUTE' || status == 'MATCHED')
-                  ElevatedButton(onPressed: () => _action(() => api.arrived(id)), child: const Text('I have arrived')),
+                  ElevatedButton(onPressed: () => _arrived(id), child: const Text('I have arrived')),
                 if (_showPinEntry(status)) ...[
                   const SizedBox(height: 12),
                   const Text('Enter rider pickup PIN', style: TextStyle(fontWeight: FontWeight.w600)),
@@ -243,14 +346,32 @@ class _DriverActiveRideScreenState extends State<DriverActiveRideScreen> {
                   const SizedBox(height: 8),
                   const Text('Trip completed', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w700)),
                   const SizedBox(height: 8),
-                  OutlinedButton(onPressed: _showRatingSheet, child: const Text('Rate your rider')),
+                  if (paymentStatus == 'AWAITING_PAYMENT')
+                    const Text('Waiting for rider to pay', textAlign: TextAlign.center)
+                  else if (paymentStatus == 'AWAITING_CONFIRMATION')
+                    ElevatedButton(
+                      onPressed: () => _action(() => api.confirmPayment(id)),
+                      child: const Text('Confirm payment received'),
+                    )
+                  else if (paymentStatus == 'CAPTURED') ...[
+                    const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.check_circle, color: Colors.green),
+                        SizedBox(width: 8),
+                        Text('Paid', style: TextStyle(fontWeight: FontWeight.w700)),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    OutlinedButton(onPressed: _showRatingSheet, child: const Text('Rate your rider')),
+                  ],
                 ],
-                const SizedBox(height: 8),
-                SafetyBar(token: widget.token, rideId: id),
               ],
             ),
           ),
+          ),
         ],
+      ),
       ),
     );
   }

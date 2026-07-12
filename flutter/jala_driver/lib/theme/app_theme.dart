@@ -6,7 +6,7 @@ export 'tokens.dart';
 
 class AppTheme {
   static TextTheme _textTheme() {
-    final base = GoogleFonts.manropeTextTheme(ThemeData.dark().textTheme);
+    final base = GoogleFonts.plusJakartaSansTextTheme(ThemeData.dark().textTheme);
     return base.copyWith(
       displayLarge: base.displayLarge?.copyWith(
         fontSize: 28,
@@ -46,7 +46,7 @@ class AppTheme {
       useMaterial3: true,
       brightness: Brightness.dark,
       scaffoldBackgroundColor: Tokens.bgBase,
-      fontFamily: GoogleFonts.manrope().fontFamily,
+      fontFamily: GoogleFonts.plusJakartaSans().fontFamily,
       textTheme: _textTheme(),
       colorScheme: const ColorScheme.dark(
         primary: primary,
@@ -61,7 +61,7 @@ class AppTheme {
         backgroundColor: Tokens.bgBase,
         foregroundColor: Tokens.gold500,
         elevation: 0,
-        titleTextStyle: GoogleFonts.manrope(
+        titleTextStyle: GoogleFonts.plusJakartaSans(
           fontSize: 18,
           fontWeight: FontWeight.w600,
           color: Tokens.gold500,
@@ -103,7 +103,7 @@ class AppTheme {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(Tokens.radiusButton),
           ),
-          textStyle: GoogleFonts.manrope(fontWeight: FontWeight.w700, fontSize: 16),
+          textStyle: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.w700, fontSize: 16),
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
@@ -121,13 +121,13 @@ class AppTheme {
         indicatorColor: primary.withValues(alpha: 0.25),
         labelTextStyle: WidgetStateProperty.resolveWith((states) {
           if (states.contains(WidgetState.selected)) {
-            return GoogleFonts.manrope(
+            return GoogleFonts.plusJakartaSans(
               color: primary,
               fontWeight: FontWeight.w600,
               fontSize: 12,
             );
           }
-          return GoogleFonts.manrope(color: Tokens.textSecondary, fontSize: 12);
+          return GoogleFonts.plusJakartaSans(color: Tokens.textSecondary, fontSize: 12);
         }),
       ),
     );
