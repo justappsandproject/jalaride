@@ -97,7 +97,18 @@ const pinBody = z.object({
 });
 
 export async function registerRideExtras(app: FastifyInstance) {
-  app.post("/:id/share", { preHandler: [app.authenticate] }, async (req, reply) => {
+  const auth = async (request: any, reply: any) => {
+    if (typeof app.authenticate === "function") {
+      return app.authenticate(request, reply);
+    }
+    try {
+      await request.jwtVerify();
+    } catch {
+      return reply.status(401).send({ error: "Unauthorized" });
+    }
+  };
+
+  app.post("/:id/share", { preHandler: [auth] }, async (req, reply) => {
     const user = req.user as { sub: string; role: string };
     if (user.role !== "RIDER") return reply.status(403).send({ error: "Riders only" });
     const { id } = req.params as { id: string };
@@ -106,7 +117,7 @@ export async function registerRideExtras(app: FastifyInstance) {
     return link;
   });
 
-  app.post("/:id/rate", { preHandler: [app.authenticate] }, async (req, reply) => {
+  app.post("/:id/rate", { preHandler: [auth] }, async (req, reply) => {
     const user = req.user as { sub: string; role: string };
     const { id } = req.params as { id: string };
     const parsed = rateBody.safeParse(req.body);
@@ -132,22 +143,29 @@ export async function registerRideExtras(app: FastifyInstance) {
     }
     if (!rateeId) return reply.status(400).send({ error: "Missing ratee" });
 
-    const rating = await app.prisma.rating.upsert({
-      where: { rideId_raterId: { rideId: id, raterId: user.sub } },
-      create: {
-        rideId: id,
-        raterId: user.sub,
-        rateeId,
-        score: parsed.data.score,
-        tags: parsed.data.tags,
-        comment: parsed.data.comment,
-      },
-      update: {
-        score: parsed.data.score,
-        tags: parsed.data.tags,
-        comment: parsed.data.comment,
-      },
+    const existing = await app.prisma.rating.findFirst({
+      where: { rideId: id, raterId: user.sub },
     });
+    const rating = existing
+      ? await app.prisma.rating.update({
+          where: { id: existing.id },
+          data: {
+            score: parsed.data.score,
+            tags: parsed.data.tags,
+            comment: parsed.data.comment,
+            rateeId,
+          },
+        })
+      : await app.prisma.rating.create({
+          data: {
+            rideId: id,
+            raterId: user.sub,
+            rateeId,
+            score: parsed.data.score,
+            tags: parsed.data.tags,
+            comment: parsed.data.comment,
+          },
+        });
 
     // Refresh driver average if rider rated driver
     if (user.role === "RIDER" && ride.driverId) {
@@ -167,7 +185,7 @@ export async function registerRideExtras(app: FastifyInstance) {
   });
 
   /** Driver enters PIN to unlock start; rider confirms with optional pin match */
-  app.post("/:id/verify-pin", { preHandler: [app.authenticate] }, async (req, reply) => {
+  app.post("/:id/verify-pin", { preHandler: [auth] }, async (req, reply) => {
     const user = req.user as { sub: string; role: string };
     const { id } = req.params as { id: string };
     const parsed = pinBody.safeParse(req.body ?? {});

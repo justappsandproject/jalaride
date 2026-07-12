@@ -213,11 +213,12 @@ model Rating {
   rateeId   String
   ratee     User     @relation("Ratee", fields: [rateeId], references: [id])
   score     Int
-  tags      String[] @default([])
+  /** JSON string array of feedback tags */
+  tags      Json     @default("[]")
   comment   String?
   createdAt DateTime @default(now())
 
-  @@unique([rideId, raterId])
+  @@index([rideId, raterId])
 }
 
 model SosEvent {
