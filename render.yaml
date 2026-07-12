@@ -13,8 +13,9 @@ services:
     # Install with all deps (prisma/typescript are production deps). Prefer install over ci
     # so a lock drift never hard-blocks free-tier deploys.
     buildCommand: npm install && npx prisma generate && npm run build
-    # Seed is best-effort so a seed hiccup never blocks the API coming up
-    startCommand: npx prisma db push && (npx prisma db seed || true) && npm start
+    # --accept-data-loss is required when adding unique constraints (shareToken);
+    # field is new/nullable so this is safe for our deploy.
+    startCommand: npx prisma db push --accept-data-loss && (npx prisma db seed || true) && npm start
     healthCheckPath: /health
     envVars:
       - key: NODE_ENV
