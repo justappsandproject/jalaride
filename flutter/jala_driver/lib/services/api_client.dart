@@ -139,6 +139,16 @@ class ApiClient {
     return data['ride'] as Map<String, dynamic>?;
   }
 
+  Future<Map<String, dynamic>> getRide(String id) async {
+    final data = _decode(await _get(ApiConfig.uri('/v1/rides/$id')));
+    return data['ride'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> confirmPayment(String rideId, {String? method}) async =>
+      _decode(await _post(ApiConfig.uri('/v1/rides/$rideId/confirm-payment'), {
+        if (method != null) 'method': method,
+      }));
+
   Future<Map<String, dynamic>> acceptRide(String id) async {
     return _decode(await _post(ApiConfig.uri('/v1/rides/$id/accept'), {}));
   }
@@ -221,9 +231,6 @@ class ApiClient {
     final data = _decode(await _get(ApiConfig.uri('/v1/safety/recordings', {'rideId': rideId})));
     return data['recordings'] is List ? data['recordings'] as List<dynamic> : [];
   }
-
-  Future<Map<String, dynamic>> confirmPayment(String rideId) async =>
-      _decode(await _post(ApiConfig.uri('/v1/rides/$rideId/confirm-payment'), {}));
 
   Future<http.Response> _get(Uri uri) => _send(() => http.get(uri, headers: _headers));
 

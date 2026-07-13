@@ -671,6 +671,11 @@ export async function rideRoutes(app: FastifyInstance) {
     const user = req.user as { sub: string; role: string };
     if (user.role !== "DRIVER") return reply.status(403).send({ error: "Drivers only" });
     const { id } = req.params as { id: string };
+    const body = z
+      .object({ method: z.enum(["WALLET", "CARD", "TRANSFER", "CASH"]).optional() })
+      .safeParse(req.body ?? {});
+    const methodHint = body.success ? body.data.method : undefined;
+
     const driver = await app.prisma.driver.findUnique({ where: { userId: user.sub } });
     const ride = await app.prisma.ride.findUnique({ where: { id }, include: { payment: true } });
     if (!ride || !driver || ride.driverId !== driver.id) {
@@ -679,15 +684,39 @@ export async function rideRoutes(app: FastifyInstance) {
     if (ride.status !== "COMPLETED") {
       return reply.status(400).send({ error: "Trip must be completed first" });
     }
-    if (!ride.payment || ride.payment.status === "AWAITING_PAYMENT") {
-      return reply.status(400).send({ error: "Rider has not selected a payment method yet" });
-    }
-    if (ride.payment.status === "CAPTURED") {
+
+    const amount = ride.fareFinal ?? ride.fareEstimate ?? 0;
+
+    if (!ride.payment) {
+      await app.prisma.payment.create({
+        data: {
+          rideId: id,
+          amount,
+          method: methodHint ?? "CASH",
+          status: "AWAITING_CONFIRMATION",
+        },
+      });
+    } else if (ride.payment.status === "CAPTURED") {
       const full = await app.prisma.ride.findUnique({ where: { id }, include: rideInclude });
       return {
         ride: sanitizeRide(full as unknown as Record<string, unknown>, user.role, user.sub),
         already: true,
+        message: "Payment already confirmed",
       };
+    } else if (ride.payment.status === "AWAITING_PAYMENT") {
+      // Driver can confirm cash/transfer received even if rider hasn't tapped pay yet
+      await app.prisma.payment.update({
+        where: { rideId: id },
+        data: {
+          method:
+            methodHint ??
+            (ride.payment.method && ride.payment.method !== "PENDING"
+              ? ride.payment.method
+              : "CASH"),
+          status: "AWAITING_CONFIRMATION",
+          amount: amount || ride.payment.amount,
+        },
+      });
     }
 
     await app.prisma.payment.update({
@@ -696,6 +725,7 @@ export async function rideRoutes(app: FastifyInstance) {
         status: "CAPTURED",
         confirmedByDriver: true,
         confirmedAt: new Date(),
+        ...(methodHint ? { method: methodHint } : {}),
       },
     });
 

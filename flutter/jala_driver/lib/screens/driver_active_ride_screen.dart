@@ -30,6 +30,7 @@ class _DriverActiveRideScreenState extends State<DriverActiveRideScreen> {
   final _pinController = TextEditingController();
   bool _ratingShown = false;
   bool _allowPop = false;
+  bool _confirmingPayment = false;
   int? _waitSeconds;
 
   @override
@@ -54,14 +55,22 @@ class _DriverActiveRideScreenState extends State<DriverActiveRideScreen> {
 
   Future<void> _load() async {
     try {
-      final ride = await ApiClient(token: widget.token).activeRide();
+      final api = ApiClient(token: widget.token);
+      Map<String, dynamic>? ride = await api.activeRide();
+      // Keep completed unpaid trips on screen even if /active briefly misses them
+      final currentId = _ride?['id'] as String?;
+      if (ride == null && currentId != null && _ride?['status'] == 'COMPLETED') {
+        try {
+          ride = await api.getRide(currentId);
+        } catch (_) {}
+      }
       if (!mounted) return;
       if (ride != null) {
         setState(() {
           _ride = ride;
-          if (ride['waitSecondsLeft'] is num) {
-            _waitSeconds = (ride['waitSecondsLeft'] as num).toInt();
-          } else if (ride['status'] != 'ARRIVED') {
+          if (ride?['waitSecondsLeft'] is num) {
+            _waitSeconds = (ride?['waitSecondsLeft'] as num).toInt();
+          } else if (ride?['status'] != 'ARRIVED') {
             _waitSeconds = null;
           }
         });
@@ -75,6 +84,38 @@ class _DriverActiveRideScreenState extends State<DriverActiveRideScreen> {
         WidgetsBinding.instance.addPostFrameCallback((_) => _showRatingSheet());
       }
     } catch (_) {}
+  }
+
+  Future<void> _confirmPaymentReceived() async {
+    final id = _ride?['id'] as String?;
+    if (id == null || _confirmingPayment) return;
+    setState(() => _confirmingPayment = true);
+    try {
+      final res = await ApiClient(token: widget.token).confirmPayment(id);
+      final updated = res['ride'] as Map<String, dynamic>?;
+      if (!mounted) return;
+      if (updated != null) {
+        setState(() => _ride = updated);
+      } else {
+        await _load();
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(res['message']?.toString() ?? 'Payment confirmed')),
+        );
+      }
+      final payment = _ride?['paymentSummary'] as Map<String, dynamic>?;
+      if (payment?['status'] == 'CAPTURED' && !_ratingShown) {
+        _ratingShown = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) => _showRatingSheet());
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+      }
+    } finally {
+      if (mounted) setState(() => _confirmingPayment = false);
+    }
   }
 
   Future<void> _action(Future<Map<String, dynamic>> Function() fn) async {
@@ -345,25 +386,48 @@ class _DriverActiveRideScreenState extends State<DriverActiveRideScreen> {
                 if (status == 'COMPLETED') ...[
                   const SizedBox(height: 8),
                   const Text('Trip completed', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Fare: ₦${ride['fareFinal'] ?? ride['fareEstimate'] ?? '—'}',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Brand.accent, fontSize: 18, fontWeight: FontWeight.w700),
+                  ),
                   const SizedBox(height: 8),
-                  if (paymentStatus == 'AWAITING_PAYMENT')
-                    const Text('Waiting for rider to pay', textAlign: TextAlign.center)
-                  else if (paymentStatus == 'AWAITING_CONFIRMATION')
-                    ElevatedButton(
-                      onPressed: () => _action(() => api.confirmPayment(id)),
-                      child: const Text('Confirm payment received'),
-                    )
-                  else if (paymentStatus == 'CAPTURED') ...[
+                  if (paymentStatus == 'CAPTURED') ...[
                     const Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Icon(Icons.check_circle, color: Colors.green),
                         SizedBox(width: 8),
-                        Text('Paid', style: TextStyle(fontWeight: FontWeight.w700)),
+                        Text('Payment received', style: TextStyle(fontWeight: FontWeight.w700)),
                       ],
                     ),
                     const SizedBox(height: 8),
                     OutlinedButton(onPressed: _showRatingSheet, child: const Text('Rate your rider')),
+                  ] else ...[
+                    Text(
+                      paymentStatus == 'AWAITING_CONFIRMATION'
+                          ? 'Rider selected ${payment?['method'] ?? 'payment'}. Confirm when you have received it.'
+                          : 'Confirm when you have received payment from the rider.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Brand.textSecondary, fontSize: 13),
+                    ),
+                    const SizedBox(height: 12),
+                    ElevatedButton(
+                      onPressed: _confirmingPayment ? null : _confirmPaymentReceived,
+                      style: ElevatedButton.styleFrom(
+                        minimumSize: const Size.fromHeight(52),
+                        backgroundColor: Brand.accent,
+                        foregroundColor: Brand.background,
+                      ),
+                      child: _confirmingPayment
+                          ? const SizedBox(
+                              height: 22,
+                              width: 22,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text('Confirm payment received', style: TextStyle(fontWeight: FontWeight.w700)),
+                    ),
                   ],
                 ],
               ],
