@@ -1,7 +1,7 @@
 name: jala_driver
 description: Jala Ride — Driver app (Flutter)
 publish_to: 'none'
-version: 1.4.0+9
+version: 1.4.1+10
 
 environment:
   sdk: ^3.12.2
